@@ -177,10 +177,86 @@
     margin: 0;
 }
 
-/* 박스 맨 위 설명 (아래에 구분선) */
+/* 박스 맨 위 설명 (구분선 없이 아래 여백만 아주 살짝) */
 .mf-intro {
-    padding-bottom: calc(var(--mf-sp) * 3);
-    border-bottom: 1px solid var(--mf-line);
+    padding-bottom: 0;
+}
+
+.mf-intro + .mf-item {
+    padding-top: calc(var(--mf-sp) * 1.5);
+}
+
+/* 라디오 그룹 제목 */
+.mf-head {
+    font-weight: 600;
+    margin: 0 0 var(--mf-sp);
+}
+
+/* 접이식 박스: 접히면 제목 + 안내 문구만 남김 */
+.mf-toggle {
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.mf-box legend i.mf-chevron {
+    margin: 0 0 0 calc(var(--mf-sp) * 1.5);
+    font-size: 0.8em;
+    transition: transform 0.2s;
+}
+
+.mf-collapsible:not(.mf-collapsed) .mf-chevron {
+    transform: rotate(90deg);
+}
+
+.mf-hint {
+    display: none;
+}
+
+.mf-collapsible.mf-collapsed > .mf-hint {
+    display: block;
+    cursor: pointer;
+}
+
+.mf-collapsible.mf-collapsed > *:not(legend):not(.mf-hint) {
+    display: none;
+}
+
+/* 안내 문구가 마지막 자식이어도 마지막 옵션의 아래 여백은 0 */
+.mf-item:last-of-type {
+    padding-bottom: 0;
+}
+
+/* 길게 누르기 시간 슬라이더 한 줄: 이름 / 슬라이더 / 값 */
+.mf-range {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--mf-sp) * 3);
+    margin: calc(var(--mf-sp) * 1.5) 0;
+}
+
+.mf-range-name {
+    flex: 0 0 auto;
+    min-width: 3.5em;
+}
+
+.mf-range input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+}
+
+.mf-range-val {
+    flex: 0 0 auto;
+    min-width: 4.5em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.8;
+}
+
+/* 펼친 메시지 더블탭 시 모바일 확대 방지 */
+#chat .mes.mf-pinned {
+    touch-action: manipulation;
 }
 
 /* 옵션 한 칸: 칸 사이에 구분선 */

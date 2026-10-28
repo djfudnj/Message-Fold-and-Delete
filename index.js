@@ -13,6 +13,10 @@
 //  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
+//      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
+//      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
+//      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
+//      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
 //      · Hide & Fold 연동: hide 하면 자동 fold, unhide 하면 자동 unfold (팝업 버튼도 하나로 합쳐짐)
 //      · 슬래시 명령어로 만든 메시지(/sendas, /comment 등, extra.model='slash command') 자동 접기 (아직 안 눌렀으면 인용문 색을 20% 덧입힘)
 
@@ -28,7 +32,19 @@ const COMMENT_TYPE = 'comment';   // /comment 등으로 만든 메시지의 extr
 
 // ===== 확장 설정 (확장 패널) =====
 const MODULE = 'message_fold_ext';
-const DEFAULTS = { linkHideFold: false, linkMode: 'replace', autoFoldComments: false, autoHideComments: false };
+const DEFAULTS = {
+    linkHideFold: false,
+    linkMode: 'replace',
+    autoFoldComments: false,
+    autoHideComments: false,
+    autoScope: 'comment',   // 자동 접기/숨기기 대상: 'comment'(슬래시 명령어 메시지만) | 'all'(유저 메시지가 아닌 모든 메시지)
+    tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
+    closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
+    longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
+    selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
+    holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
+    holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
+};
 
 function settings() {
     const { extensionSettings } = SillyTavern.getContext();
@@ -52,6 +68,13 @@ const SLASH_MODEL = 'slash command';
 const isSlashMade = (msg) => !!msg && !msg.is_user && !!msg.extra
     && (msg.extra.model === SLASH_MODEL || isComment(msg));
 
+// 자동 접기/숨기기 대상: 설정에 따라 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
+// 이미 있던 메시지는 건드리지 않고, 채팅을 연 시점 이후(id >= autoBaseline)에 생성된 메시지만 대상으로 함
+let autoBaseline = Infinity;
+const syncBaseline = () => { autoBaseline = chat.length; };
+const isAutoTarget = (msg, id) => !!msg && id >= autoBaseline
+    && (settings().autoScope === 'all' ? !msg.is_user : isSlashMade(msg));
+
 // 상태에 따라 번갈아 나오는 두 개의 버튼 (message hide/unhide 처럼 서로 다른 버튼이 같은 자리에서 교체)
 //  - .mes_fold   : 아직 접기 설정이 안 된 상태에서 보임 → 누르면 접기 설정
 //  - .mes_unfold : 접기 설정된 상태에서 보임        → 누르면 접기 해제
@@ -62,9 +85,14 @@ const TITLE_UNSET = 'Unfold message';
 const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 
 // ===== 길게 누르기 설정 =====
-const HOLD_MS_MOUSE = 610;  // 마우스 길게 누르기 시간
-const HOLD_MS_TOUCH = 750;  // 터치(모바일) 길게 누르기 시간
-const HOLD_MS_TOUCH_SEL = 600; // 터치: 이미 선택된 글자 위에서 길게 누르는 시간 (선택 메뉴용)
+// 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서 조절.
+// 터치로 이미 선택된 글자 위를 누를 때는 터치 시간의 80% 를 사용
+const HOLD_MIN = 500;
+const HOLD_MAX = 1000;
+const holdTime = (v, fallback) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(HOLD_MAX, Math.max(HOLD_MIN, n)) : fallback;
+};
 const VISUAL_MS = 300;      // 팝업 직전 이 시간 동안 테두리가 서서히 진해짐
 const AFTER_POPUP_MS = 80; // 팝업이 뜬 뒤에도 테두리를 유지하는 시간
 const MOVE_TOLERANCE = 10;  // px
@@ -166,7 +194,7 @@ function render(mes) {
     const folded = isFolded(id);                 // 저장된 접힘 상태
     const collapsed = folded && openId !== id;   // 실제로 접혀 보이는지 (임시로 펼친 경우 제외)
 
-    const unseen = folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태
+    const unseen = settings().tintUnseen && folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태 (색 덧입힘 설정이 켜져 있을 때만)
     const replaceFold = linkMode() === 'replace';                // Fold 대체 모드면 별도 fold 아이콘은 숨김
 
     mes.classList.toggle('mf-folded', collapsed);
@@ -270,7 +298,8 @@ function autoProcessComments() {
     let changed = false;
     const toHide = [];
     chat.forEach((msg, id) => {
-        if (!isSlashMade(msg)) return;
+        if (!isAutoTarget(msg, id)) return;
+        msg.extra ??= {};
         if (st.autoFoldComments && !msg.extra[AUTO_KEY]) {
             msg.extra[AUTO_KEY] = true;
             msg.extra[KEY] = true;
@@ -355,10 +384,15 @@ function openTemp(mes) {
         saveChatConditional();
     }
 
+    lastTap = { id: -1, time: 0 };   // 바를 연 클릭이 더블클릭의 첫 번째로 계산되지 않게
     if (openId === id) return;
     openId = id;
     refreshAll();
 }
+
+// 더블클릭/더블탭 감지용 (모바일은 dblclick 이 불안정해서 click 시각으로 직접 판정)
+const DBLCLICK_MS = 350;
+let lastTap = { id: -1, time: 0 };
 
 // 임시로 펼친 메시지를 다시 접음
 function closeTemp() {
@@ -393,9 +427,27 @@ function onDocumentClick(e) {
     // 상단바 / 하단바 / 팝업 등은 무시
     if (el.closest(IGNORE_SELECTOR)) return;
 
-    // 펼쳐진 챗 자신을 누른 경우는 그대로 유지
+    const dbl = settings().closeMode === 'dblclick';
+
+    // 펼쳐진 챗 자신을 누른 경우
     const mes = el.closest('#chat .mes');
-    if (mes && Number(mes.getAttribute('mesid')) === openId) return;
+    if (mes && Number(mes.getAttribute('mesid')) === openId) {
+        // 더블클릭 모드: 같은 메시지를 짧은 간격으로 두 번 누르면 다시 접음
+        if (dbl && !el.closest(LP_IGNORE) && !mes.querySelector('#curEditTextarea')) {
+            const now = Date.now();
+            if (lastTap.id === openId && now - lastTap.time < DBLCLICK_MS) {
+                lastTap = { id: -1, time: 0 };
+                window.getSelection()?.removeAllRanges();   // 더블클릭으로 선택된 단어 해제
+                closeTemp();
+            } else {
+                lastTap = { id: openId, time: now };
+            }
+        }
+        return;   // 그 외에는 그대로 유지
+    }
+
+    // 더블클릭 모드에서는 다른 곳을 눌러도 접히지 않음
+    if (dbl) return;
 
     // 편집 중인 챗은 접지 않음
     const openMes = document.querySelector(`#chat .mes[mesid="${openId}"]`);
@@ -780,6 +832,9 @@ function initLongPress(chatEl) {
         // 이미 선택된 글자 위를 누른 경우 → 선택 메뉴 모드
         const selHit = inText && hasSelection() && pointOnSelection(e.clientX, e.clientY);
 
+        // 패널에서 꺼 둔 기능은 시작하지 않음 (선택 메뉴 / 메시지 메뉴 각각)
+        if (selHit ? !settings().selectionMenu : !settings().longPressMenu) return;
+
         // 터치 + 본문 영역: 텍스트 선택을 방해하지 않도록 길게 누르기를 시작하지 않음
         if (!selHit && isTouch && TOUCH_TEXT_SELECTABLE && inText && isOnText(e.clientX, e.clientY, e.target.closest('.mes_text'))) return;
 
@@ -787,7 +842,9 @@ function initLongPress(chatEl) {
         cancel();
         pressTouch = isTouch;
         mode = selHit ? 'sel' : 'msg';
-        holdMs = !isTouch ? HOLD_MS_MOUSE : (selHit ? HOLD_MS_TOUCH_SEL : HOLD_MS_TOUCH);
+        const st = settings();
+        const touchMs = holdTime(st.holdTouch, 750);
+        holdMs = !isTouch ? holdTime(st.holdMouse, 610) : (selHit ? Math.round(touchMs * 0.8) : touchMs);
 
         pressedMes = mes;
         startX = e.clientX;
@@ -936,9 +993,20 @@ function initSettingsPanel() {
                         </div>
                     </div>
                 </fieldset>
-                <fieldset class="mf-box">
-                    <legend><i class="fa-solid fa-bolt"></i>Auto Fold &amp; Hide Comments</legend>
-                    <small class="mf-desc mf-intro">Only affects comment-style messages, the ones created by slash commands like /comment and /sendas. Normal chat replies are never touched.</small>
+                <fieldset class="mf-box mf-collapsible mf-collapsed">
+                    <legend class="mf-toggle" tabindex="0" role="button" aria-expanded="false"><i class="fa-solid fa-bolt"></i>Auto Fold &amp; Hide<i class="fa-solid fa-chevron-right mf-chevron"></i></legend>
+                    <small class="mf-desc mf-intro">Choose which messages the options below apply to. Only messages created from now on are affected; your own messages are never touched.</small>
+                    <div class="mf-item">
+                        <div class="mf-head">Target messages</div>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_auto_scope" value="comment">
+                            <span><span class="mf-radio-title">Comments only</span><small class="mf-desc">Only new messages made by slash commands like /comment and /sendas.</small></span>
+                        </label>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_auto_scope" value="all">
+                            <span><span class="mf-radio-title">All non-user messages</span><small class="mf-desc">Also new character replies and any other message that is not yours.</small></span>
+                        </label>
+                    </div>
                     <div class="mf-item">
                         <label class="mf-opt" for="mf_auto_fold_comments">
                             <span class="mf-opt-title">Auto-fold</span>
@@ -953,6 +1021,60 @@ function initSettingsPanel() {
                         </label>
                         <small class="mf-desc">Hides them too, so they are left out of the prompt.</small>
                     </div>
+                    <small class="mf-desc mf-hint">Click to expand: auto-fold or hide new messages.</small>
+                </fieldset>
+                <fieldset class="mf-box">
+                    <legend><i class="fa-solid fa-hand-pointer"></i>Delete &amp; Edit</legend>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_long_press_menu">
+                            <span class="mf-opt-title">Long-press message menu</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_long_press_menu"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Press and hold a message to open the menu with Delete, Hide and Fold.</small>
+                    </div>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_selection_menu">
+                            <span class="mf-opt-title">Selection edit &amp; delete</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_selection_menu"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Select text, then press and hold the selection to edit or delete just that part.</small>
+                    </div>
+                    <div class="mf-item">
+                        <div class="mf-head">Hold time</div>
+                        <label class="mf-range">
+                            <span class="mf-range-name">Mouse</span>
+                            <input type="range" id="mf_hold_mouse" min="500" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_mouse_val"></span>
+                        </label>
+                        <label class="mf-range">
+                            <span class="mf-range-name">Touch</span>
+                            <input type="range" id="mf_hold_touch" min="500" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_touch_val"></span>
+                        </label>
+                        <small class="mf-desc">How long to press before the popup appears. Longer values help avoid accidental popups.</small>
+                    </div>
+                </fieldset>
+                <fieldset class="mf-box mf-collapsible mf-collapsed">
+                    <legend class="mf-toggle" tabindex="0" role="button" aria-expanded="false"><i class="fa-solid fa-sliders"></i>Other Settings<i class="fa-solid fa-chevron-right mf-chevron"></i></legend>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_tint_unseen">
+                            <span class="mf-opt-title">Tint unread folded messages</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_tint_unseen"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Auto-folded bars get a color tint until you open them for the first time.</small>
+                    </div>
+                    <div class="mf-item">
+                        <div class="mf-head">Close an expanded message</div>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_close_mode" value="outside">
+                            <span><span class="mf-radio-title">Click elsewhere</span><small class="mf-desc">Clicking or tapping anywhere outside the message folds it again.</small></span>
+                        </label>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_close_mode" value="dblclick">
+                            <span><span class="mf-radio-title">Double-click the message</span><small class="mf-desc">Double-click (double-tap on mobile) the expanded message to fold it again. Clicking elsewhere does nothing.</small></span>
+                        </label>
+                    </div>
+                    <small class="mf-desc mf-hint">Click to expand: unread tint and how to close an expanded message.</small>
                 </fieldset>
             </div>
         </div>`;
@@ -974,6 +1096,56 @@ function initSettingsPanel() {
     bind('mf_link_hide_fold', 'linkHideFold', syncModes);
     bind('mf_auto_fold_comments', 'autoFoldComments');
     bind('mf_auto_hide_comments', 'autoHideComments');
+    bind('mf_tint_unseen', 'tintUnseen');
+    bind('mf_long_press_menu', 'longPressMenu');
+    bind('mf_selection_menu', 'selectionMenu');
+
+    // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
+    const bindRange = (id, key, fallback) => {
+        const el = wrap.querySelector(`#${id}`);
+        const val = wrap.querySelector(`#${id}_val`);
+        const show = () => { val.textContent = `${el.value} ms`; };
+        el.value = holdTime(settings()[key], fallback);
+        show();
+        el.addEventListener('input', show);
+        el.addEventListener('change', () => {
+            settings()[key] = Number(el.value);
+            ctx().saveSettingsDebounced();
+        });
+    };
+    bindRange('mf_hold_mouse', 'holdMouse', 610);
+    bindRange('mf_hold_touch', 'holdTouch', 750);
+
+    // 접이식 박스 (옵시디언 콜아웃처럼 기본은 접힘): 제목 또는 안내 문구를 누르면 펼침/접힘
+    for (const box of wrap.querySelectorAll('.mf-collapsible')) {
+        const head = box.querySelector('.mf-toggle');
+        const toggle = () => {
+            const collapsed = box.classList.toggle('mf-collapsed');
+            head.setAttribute('aria-expanded', String(!collapsed));
+        };
+        head.addEventListener('click', toggle);
+        head.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            toggle();
+        });
+        box.querySelector('.mf-hint')?.addEventListener('click', toggle);
+    }
+
+    // 라디오 묶음 공통 처리
+    const bindRadios = (name, key) => {
+        for (const r of wrap.querySelectorAll(`input[name="${name}"]`)) {
+            r.checked = r.value === settings()[key];
+            r.addEventListener('change', () => {
+                if (!r.checked) return;
+                settings()[key] = r.value;
+                ctx().saveSettingsDebounced();
+                scheduleRefresh();
+            });
+        }
+    };
+    bindRadios('mf_auto_scope', 'autoScope');
+    bindRadios('mf_close_mode', 'closeMode');
 
     // Fold 버튼 유지 / 대체 (라디오)
     const current = settings().linkMode === 'keep' ? 'keep' : 'replace';
@@ -1029,6 +1201,11 @@ jQuery(() => {
     }).observe(chatEl, { subtree: true, attributes: true, attributeFilter: ['is_system'], attributeOldValue: true });
 
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
+    // 자동 접기/숨기기 기준선: 채팅을 열 때 기존 메시지 수로 갱신, 삭제로 줄어들면 같이 낮춤
+    syncBaseline();
+    if (event_types.CHAT_CHANGED) eventSource.on(event_types.CHAT_CHANGED, syncBaseline);
+    if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, () => { autoBaseline = Math.min(autoBaseline, chat.length); });
+
     ['CHAT_CHANGED', 'MESSAGE_DELETED'].forEach((name) => {
         if (event_types[name]) eventSource.on(event_types[name], () => { openId = null; });
     });
