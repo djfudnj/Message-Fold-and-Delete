@@ -37,7 +37,7 @@ const DEFAULTS = {
     linkMode: 'replace',
     autoFoldComments: false,
     autoHideComments: false,
-    autoScope: 'comment',   // 자동 접기/숨기기 대상: 'comment'(슬래시 명령어 메시지만) | 'all'(유저 메시지가 아닌 모든 메시지)
+    autoScope: 'none',      // 자동 접기/숨기기 대상: 'none'(사용 안 함) | 'comment'(슬래시 명령어 메시지만) | 'all'(유저가 아닌 모든 메시지) | 'every'(유저 메시지 포함 전부)
     tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
     closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
@@ -50,7 +50,13 @@ function settings() {
     const { extensionSettings } = SillyTavern.getContext();
     extensionSettings[MODULE] ??= {};
     for (const [k, v] of Object.entries(DEFAULTS)) extensionSettings[MODULE][k] ??= v;
-    return extensionSettings[MODULE];
+    const st = extensionSettings[MODULE];
+    // 대상이 'none' 이면 자동 접기/숨기기는 항상 꺼진 상태로 유지
+    if (st.autoScope === 'none') {
+        st.autoFoldComments = false;
+        st.autoHideComments = false;
+    }
+    return st;
 }
 
 // Hide & Fold 연동 모드: null(끔) | 'keep'(Fold 버튼 유지) | 'replace'(Fold 버튼을 Hide 에 합침)
@@ -72,8 +78,15 @@ const isSlashMade = (msg) => !!msg && !msg.is_user && !!msg.extra
 // 이미 있던 메시지는 건드리지 않고, 채팅을 연 시점 이후(id >= autoBaseline)에 생성된 메시지만 대상으로 함
 let autoBaseline = Infinity;
 const syncBaseline = () => { autoBaseline = chat.length; };
-const isAutoTarget = (msg, id) => !!msg && id >= autoBaseline
-    && (settings().autoScope === 'all' ? !msg.is_user : isSlashMade(msg));
+const isAutoTarget = (msg, id) => {
+    if (!msg || id < autoBaseline) return false;
+    switch (settings().autoScope) {
+        case 'every': return true;             // 유저 메시지 포함 전부
+        case 'all': return !msg.is_user;       // 유저가 아닌 모든 메시지
+        case 'comment': return isSlashMade(msg); // 슬래시 명령어 메시지만
+        default: return false;                 // 'none'
+    }
+};
 
 // 상태에 따라 번갈아 나오는 두 개의 버튼 (message hide/unhide 처럼 서로 다른 버튼이 같은 자리에서 교체)
 //  - .mes_fold   : 아직 접기 설정이 안 된 상태에서 보임 → 누르면 접기 설정
@@ -293,6 +306,7 @@ function decorate(mes) {
 // 슬래시 명령어로 만든 메시지(/comment, /sendas 등)를 자동으로 접고 / 숨김 (메시지마다 각각 딱 한 번만)
 function autoProcessComments() {
     const st = settings();
+    if (st.autoScope === 'none') return;
     if (!st.autoFoldComments && !st.autoHideComments) return;
 
     let changed = false;
@@ -995,9 +1009,13 @@ function initSettingsPanel() {
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
                     <legend class="mf-toggle" tabindex="0" role="button" aria-expanded="false"><i class="fa-solid fa-bolt"></i>Auto Fold &amp; Hide<i class="fa-solid fa-chevron-right mf-chevron"></i></legend>
-                    <small class="mf-desc mf-intro">Choose which messages the options below apply to. Only messages created from now on are affected; your own messages are never touched.</small>
+                    <small class="mf-desc mf-intro">Choose which messages the options below apply to. Only messages created from now on are affected. With "None", auto-fold and auto-hide are turned off.</small>
                     <div class="mf-item">
                         <div class="mf-head">Target messages</div>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_auto_scope" value="none">
+                            <span><span class="mf-radio-title">None</span><small class="mf-desc">Don't auto-fold or auto-hide anything. The toggles below are turned off and locked.</small></span>
+                        </label>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="comment">
                             <span><span class="mf-radio-title">Comments only</span><small class="mf-desc">Only new messages made by slash commands like /comment and /sendas.</small></span>
@@ -1006,15 +1024,19 @@ function initSettingsPanel() {
                             <input type="radio" name="mf_auto_scope" value="all">
                             <span><span class="mf-radio-title">All non-user messages</span><small class="mf-desc">Also new character replies and any other message that is not yours.</small></span>
                         </label>
+                        <label class="mf-radio">
+                            <input type="radio" name="mf_auto_scope" value="every">
+                            <span><span class="mf-radio-title">All messages</span><small class="mf-desc">Every new message, including your own.</small></span>
+                        </label>
                     </div>
-                    <div class="mf-item">
+                    <div class="mf-item mf-auto-toggle">
                         <label class="mf-opt" for="mf_auto_fold_comments">
                             <span class="mf-opt-title">Auto-fold</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_auto_fold_comments"><span class="mf-slider"></span></span>
                         </label>
                         <small class="mf-desc">Folds them as soon as they appear. The bar stays tinted until you open it for the first time.</small>
                     </div>
-                    <div class="mf-item">
+                    <div class="mf-item mf-auto-toggle">
                         <label class="mf-opt" for="mf_auto_hide_comments">
                             <span class="mf-opt-title">Auto-hide</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_auto_hide_comments"><span class="mf-slider"></span></span>
@@ -1144,8 +1166,34 @@ function initSettingsPanel() {
             });
         }
     };
-    bindRadios('mf_auto_scope', 'autoScope');
     bindRadios('mf_close_mode', 'closeMode');
+
+    // 대상이 'none' 이면 Auto-fold / Auto-hide 토글을 끄고 클릭도 막음
+    const syncAutoToggles = () => {
+        const none = settings().autoScope === 'none';
+        for (const id of ['mf_auto_fold_comments', 'mf_auto_hide_comments']) {
+            const el = wrap.querySelector(`#${id}`);
+            el.checked = !!settings()[id === 'mf_auto_fold_comments' ? 'autoFoldComments' : 'autoHideComments'];
+            el.disabled = none;
+            el.closest('.mf-auto-toggle').classList.toggle('mf-disabled', none);
+        }
+    };
+    for (const r of wrap.querySelectorAll('input[name="mf_auto_scope"]')) {
+        r.checked = r.value === settings().autoScope;
+        r.addEventListener('change', () => {
+            if (!r.checked) return;
+            const st = settings();
+            st.autoScope = r.value;
+            if (r.value === 'none') {
+                st.autoFoldComments = false;
+                st.autoHideComments = false;
+            }
+            ctx().saveSettingsDebounced();
+            syncAutoToggles();
+            scheduleRefresh();
+        });
+    }
+    syncAutoToggles();
 
     // Fold 버튼 유지 / 대체 (라디오)
     const current = settings().linkMode === 'keep' ? 'keep' : 'replace';

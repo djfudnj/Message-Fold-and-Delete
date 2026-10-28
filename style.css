@@ -222,6 +222,12 @@
     display: none;
 }
 
+/* 비활성화된 옵션 (예: 대상이 None 일 때 Auto-fold / Auto-hide) */
+.mf-item.mf-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
 /* 안내 문구가 마지막 자식이어도 마지막 옵션의 아래 여백은 0 */
 .mf-item:last-of-type {
     padding-bottom: 0;
