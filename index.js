@@ -323,7 +323,8 @@ function autoProcessComments() {
         if (st.autoHideComments && !msg.extra[AUTO_HIDE_KEY]) {
             msg.extra[AUTO_HIDE_KEY] = true;
             changed = true;
-            if (!msg.is_system) toHide.push(id);   // comment 는 원래 is_system 이라 이미 숨김 상태
+            if (!msg.is_system) toHide.push(id);   // (comment 는 원래 is_system 이라 /hide 가 필요 없음)
+            else if (st.linkHideFold && !isFolded(id)) setFold(id, true);   // 이미 숨김 상태인 comment 도 연동이 켜져 있으면 같이 접음
         }
     });
     if (changed) saveChatConditional();
@@ -709,15 +710,13 @@ async function showLongPressMenu(mes) {
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
 
     // 연동 모드: 'replace' 면 Hide/Fold 버튼을 하나로 합침, 'keep' 이면 두 버튼 그대로 (hide 시 fold 도 같이 적용)
-    // comment 는 원래 system 메시지라 연동 대상에서 제외 (replace 에서는 Fold 만 표시)
+    // comment 도 일반 메시지와 똑같이 연동 (comment 는 처음부터 is_system 이라 항상 '숨김' 상태로 취급됨)
     const mode = linkMode();
-    const comment = isComment(chat[id]);
-    const linked = !!mode && !comment;
+    const linked = !!mode;
     const foldButton = { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD };
     const hideButton = { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE };
     let customButtons;
-    if (mode === 'replace' && comment) customButtons = [foldButton];
-    else if (mode === 'replace') customButtons = [{ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE }];
+    if (mode === 'replace') customButtons = [{ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE }];
     else customButtons = [hideButton, foldButton];
 
     let action = null; // 'delete' | 'hide' | 'fold' | null
@@ -1258,9 +1257,10 @@ jQuery(() => {
             const mes = r.target;
             if (!(mes instanceof Element) || !mes.matches('.mes')) continue;
             const now = mes.getAttribute('is_system');
-            if (now === r.oldValue) continue;
+            // oldValue 가 null 이면 새로 렌더된 메시지(속성이 처음 생김)라서 무시 → 새 comment 가 저절로 접히는 것 방지
+            if (now === r.oldValue || r.oldValue === null) continue;
             const id = Number(mes.getAttribute('mesid'));
-            if (Number.isNaN(id) || !chat[id] || isComment(chat[id])) continue;
+            if (Number.isNaN(id) || !chat[id]) continue;
             changed = setFold(id, now === 'true') || changed;
         }
         if (changed) saveChatConditional();
