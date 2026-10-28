@@ -4,18 +4,22 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 
 ## Features
 
+<div align="center">
 <img width="1053" height="411" alt="화면 캡처 2026-10-21 175828" src="https://github.com/user-attachments/assets/f89acdad-bbed-47e8-8ac7-21666090124d" />
+</div>
 
 * **Fold / Unfold** – Click the fold icon in a message's action buttons to collapse the message into a slim bar. The fold icon is the leftmost icon of the message actions.
 * **Peek** – Tap a folded bar to open it temporarily. Tap elsewhere to fold it again. To release the fold completely, click the unfold icon.
 
+<div align="center">
 <img width="651" height="275" alt="화면 캡처 2026-10-21 175751" src="https://github.com/user-attachments/assets/d329bf1c-bead-48cb-b85b-619a9e39f9f6" />
+</div>
 
 * **Long press menu** – Press and hold a message to open a popup: Hide / Unhide, Fold / Unfold, Delete, Cancel. Delete works like SillyTavern's built-in "Delete this message", without opening the edit window first.
 
-<img width="1036" height="342" alt="화면 캡처 2026-10-21 175858" src="https://github.com/user-attachments/assets/4a2e4877-163e-4294-b0c1-9d67a72ca902" />
-<img width="701" height="326" alt="화면 캡처 2026-10-21 180244" src="https://github.com/user-attachments/assets/12c3f55a-bbd3-4344-9bf9-2477941c8a05" />
-<img width="1046" height="348" alt="화면 캡처 2026-10-21 180300" src="https://github.com/user-attachments/assets/cd8b9db7-df7b-46d1-b51f-af53289f572b" />
+<div align="center">
+<img width="50%" alt="20261021_225652" src="https://github.com/user-attachments/assets/6a809379-6d98-4381-adad-e3992c9c2a3c" />
+</div>
 
 * **Selected text menu** – Select text inside a message, then press and hold to open a popup: Edit selection, Delete selection, Cancel.
 * **Replace all** – If the selected text appears more than once in the message, Edit selection shows a "Replace all" checkbox. Every occurrence in that message is replaced at once.
@@ -71,18 +75,22 @@ Add the following to Custom CSS if needed.
 
 ## 주요 기능
 
+<div align="center">
 <img width="1053" height="411" alt="화면 캡처 2026-10-21 175828" src="https://github.com/user-attachments/assets/f89acdad-bbed-47e8-8ac7-21666090124d" />
+</div>
 
 * **접기 / 펼치기** – 메시지 액션 버튼의 접기 아이콘을 누르면 메시지가 얇은 바로 접힙니다. 접기 아이콘은 메시지 액션의 가장 왼쪽에 있습니다.
 * **미리보기** – 접힌 바를 누르면 임시로 펼쳐지고, 다른 곳을 누르면 다시 접힙니다. 접힘을 완전히 해제하려면 펼치기 아이콘을 누릅니다.
 
+<div align="center">
 <img width="651" height="275" alt="화면 캡처 2026-10-21 175751" src="https://github.com/user-attachments/assets/d329bf1c-bead-48cb-b85b-619a9e39f9f6" />
+</div>
 
 * **길게 누르기 메뉴** – 메시지를 길게 누르면 팝업이 표시됩니다: Hide / Unhide, Fold / Unfold, Delete, Cancel. Delete는 SillyTavern 기본 "메시지 삭제"와 동일하게 동작하며, 편집 창을 먼저 열 필요가 없습니다.
 
-<img width="1036" height="342" alt="화면 캡처 2026-10-21 175858" src="https://github.com/user-attachments/assets/4a2e4877-163e-4294-b0c1-9d67a72ca902" />
-<img width="701" height="326" alt="화면 캡처 2026-10-21 180244" src="https://github.com/user-attachments/assets/12c3f55a-bbd3-4344-9bf9-2477941c8a05" />
-<img width="1046" height="348" alt="화면 캡처 2026-10-21 180300" src="https://github.com/user-attachments/assets/cd8b9db7-df7b-46d1-b51f-af53289f572b" />
+<div align="center">
+<img width="50%" alt="20261021_225652" src="https://github.com/user-attachments/assets/6a809379-6d98-4381-adad-e3992c9c2a3c" />
+</div>
 
 * **선택한 글자 메뉴** – 메시지 안의 글자를 선택한 뒤 길게 누르면 팝업이 표시됩니다: Edit selection, Delete selection, Cancel.
 * **모두 바꾸기** – 선택한 글자가 메시지 안에 여러 번 있으면 Edit selection 창에 "Replace all" 체크박스가 표시됩니다. 해당 메시지 안의 모든 일치 항목이 한 번에 바뀝니다.
