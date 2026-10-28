@@ -5,7 +5,9 @@
    - flex 축소 / content-visibility / 마이너스 margin 등으로 바가 겹치는 것을 방지
    바의 세부 스타일은 테마 간섭을 피하려고 index.js 에서 인라인으로 지정합니다.
    최소 높이: Custom CSS 에 :root { --mf-min-height: 40px; }
-   바 사이 간격: Custom CSS 에 :root { --mf-gap: 6px; } */
+   바 사이 간격: Custom CSS 에 :root { --mf-gap: 6px; }
+   자동 접힘 미확인 바의 덧입힘 진하기(기본 20%): Custom CSS 에 :root { --mf-tint-alpha: 30%; }
+   덧입힘 색(기본 --SmartThemeQuoteColor): Custom CSS 에 :root { --mf-tint-color: #3ca; } */
 #chat .mes.mf-folded > *:not(.mes_block) {
     display: none !important;
 }
@@ -72,6 +74,18 @@
     flex: 0 0 auto !important;
 }
 
+/* 자동 접힘 후 아직 안 눌러본 바: 인용문 색(--SmartThemeQuoteColor)을 20% 투명도로 덧씌움
+   (첫 클릭 시 .mf-unseen 이 사라지면서 같이 없어짐) */
+#chat .mes.mf-unseen > .mes_block > .mf-placeholder::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--mf-tint-color, var(--SmartThemeQuoteColor, #e18a24));
+    opacity: var(--mf-tint-alpha, 20%);
+    pointer-events: none;
+}
+
 .mf-placeholder:hover {
     filter: brightness(1.25);
 }
@@ -116,4 +130,166 @@
 @keyframes lpd-hold {
     from { box-shadow: inset 0 0 0 1.5px rgb(100 0 0 / 10%); }
     to   { box-shadow: inset 0 0 0 1.5px rgb(100 0 0 / 50%); }
+}
+
+/* ===== 확장 패널 (Message Fold & Delete) =====
+   간격은 Tavern Helper(Tailwind) 의 --spacing 을 따르고, 없으면 4px 기준 (15px = 4px x 3.75) */
+.mf-settings {
+    --mf-line: var(--grey5050a, rgba(128, 128, 128, 0.5));
+    --mf-sp: var(--spacing, 4px);
+}
+
+.mf-settings *:not(input) {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+}
+
+.mf-box {
+    margin: calc(var(--mf-sp) * 3) 0;
+    padding: calc(var(--mf-sp) * 3) calc(var(--mf-sp) * 3.75);
+    border: 1px solid var(--mf-line) !important;
+    border-radius: var(--radius-lg, 0.5rem);
+    min-inline-size: 0;
+}
+
+.mf-settings .mf-box:first-of-type {
+    margin-top: calc(var(--mf-sp) * 2.5);
+}
+
+.mf-box legend {
+    width: auto;
+    margin: 0;
+    padding: 0 calc(var(--mf-sp) * 1.5);
+    font-size: 0.85em;
+    opacity: 0.7;
+    border: 0;
+}
+
+.mf-box legend i {
+    margin-right: calc(var(--mf-sp) * 1.5);
+}
+
+.mf-desc {
+    display: block;
+    opacity: 0.65;
+    line-height: 1.4;
+    margin: 0;
+}
+
+/* 박스 맨 위 설명 (아래에 구분선) */
+.mf-intro {
+    padding-bottom: calc(var(--mf-sp) * 3);
+    border-bottom: 1px solid var(--mf-line);
+}
+
+/* 옵션 한 칸: 칸 사이에 구분선 */
+.mf-item {
+    padding: calc(var(--mf-sp) * 3) 0;
+}
+
+.mf-item + .mf-item {
+    border-top: 1px solid var(--mf-line);
+}
+
+.mf-box legend + .mf-item {
+    padding-top: 0;
+}
+
+.mf-item:last-child {
+    padding-bottom: 0;
+}
+
+/* 옵션 한 줄: 이름은 왼쪽, 토글은 맨 오른쪽 */
+.mf-opt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--mf-sp) * 3);
+    margin: 0 0 var(--mf-sp);
+    cursor: pointer;
+}
+
+.mf-opt-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-weight: 600;
+}
+
+.mf-switch {
+    position: relative;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 16px;
+}
+
+.mf-switch input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 1;
+}
+
+/* 토글: 둥근 회색 트랙(gray-300) + 흰 동그라미, 켜면 테마 인용문 색 */
+.mf-slider {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: 9999px;
+    background: var(--color-gray-300, #d1d5db);
+    transition: all 0.3s;
+}
+
+.mf-slider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 9999px;
+    background: var(--color-white, #fff);
+    transform: translateY(-50%);
+    transition: all 0.3s;
+}
+
+.mf-switch input:checked + .mf-slider {
+    background: var(--SmartThemeQuoteColor, #4a90d9);
+}
+
+.mf-switch input:checked + .mf-slider::after {
+    transform: translate(14px, -50%);
+}
+
+.mf-switch input:focus-visible + .mf-slider {
+    outline: 1px solid var(--SmartThemeQuoteColor, #4a90d9);
+    outline-offset: 1px;
+}
+
+/* 라디오 그룹 (Link Hide & Fold 가 꺼져 있으면 흐리게) */
+.mf-modes {
+    margin-top: calc(var(--mf-sp) * 3);
+    padding-left: var(--mf-sp);
+}
+
+.mf-modes.mf-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.mf-radio {
+    display: flex;
+    align-items: flex-start;
+    gap: calc(var(--mf-sp) * 2);
+    margin: calc(var(--mf-sp) * 1.5) 0;
+    cursor: pointer;
+}
+
+.mf-radio input {
+    margin: 3px 0 0;
+    flex: 0 0 auto;
 }

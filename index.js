@@ -11,10 +11,46 @@
 //    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
 //  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
 //  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
+//  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
+//  - 확장 패널 옵션
+//      · Hide & Fold 연동: hide 하면 자동 fold, unhide 하면 자동 unfold (팝업 버튼도 하나로 합쳐짐)
+//      · 슬래시 명령어로 만든 메시지(/sendas, /comment 등, extra.model='slash command') 자동 접기 (아직 안 눌렀으면 인용문 색을 20% 덧입힘)
 
 import { chat, eventSource, event_types, saveChatConditional, updateMessageBlock } from '../../../../script.js';
 
 const KEY = 'folded';
+const UNSEEN_KEY = 'mf_unseen';   // 자동 접힘 후 아직 바를 클릭하지 않은 상태 (색 덧입힘용). 바를 누르면 삭제됨
+const AUTO_HIDE_KEY = 'mf_auto_hide'; // 자동 숨기기를 이미 처리한 메시지 (직접 unhide 한 뒤 다시 숨겨지는 것 방지)
+const AUTO_KEY = 'mf_auto';       // 자동 접기를 이미 한 번 처리한 메시지 (수동으로 펼친 뒤 다시 접히는 것 방지)
+const COMMENT_TYPE = 'comment';   // /comment 등으로 만든 메시지의 extra.type 값
+
+// 미확인(자동 접힘 후 아직 안 눌러본) 바의 인용문 색 덧입힘은 style.css 의 .mf-unseen 규칙에서 처리
+
+// ===== 확장 설정 (확장 패널) =====
+const MODULE = 'message_fold_ext';
+const DEFAULTS = { linkHideFold: false, linkMode: 'replace', autoFoldComments: false, autoHideComments: false };
+
+function settings() {
+    const { extensionSettings } = SillyTavern.getContext();
+    extensionSettings[MODULE] ??= {};
+    for (const [k, v] of Object.entries(DEFAULTS)) extensionSettings[MODULE][k] ??= v;
+    return extensionSettings[MODULE];
+}
+
+// Hide & Fold 연동 모드: null(끔) | 'keep'(Fold 버튼 유지) | 'replace'(Fold 버튼을 Hide 에 합침)
+function linkMode() {
+    const st = settings();
+    if (!st.linkHideFold) return null;
+    return st.linkMode === 'keep' ? 'keep' : 'replace';
+}
+
+const isComment = (msg) => msg?.extra?.type === COMMENT_TYPE;
+
+// 슬래시 명령어로 만들어진 메시지 (/sendas, /comment, /sys 등): extra.model 이 'slash command'
+// 일반 생성 메시지는 extra.model 에 실제 모델명이 들어가고, 유저 메시지는 제외
+const SLASH_MODEL = 'slash command';
+const isSlashMade = (msg) => !!msg && !msg.is_user && !!msg.extra
+    && (msg.extra.model === SLASH_MODEL || isComment(msg));
 
 // 상태에 따라 번갈아 나오는 두 개의 버튼 (message hide/unhide 처럼 서로 다른 버튼이 같은 자리에서 교체)
 //  - .mes_fold   : 아직 접기 설정이 안 된 상태에서 보임 → 누르면 접기 설정
@@ -130,8 +166,12 @@ function render(mes) {
     const folded = isFolded(id);                 // 저장된 접힘 상태
     const collapsed = folded && openId !== id;   // 실제로 접혀 보이는지 (임시로 펼친 경우 제외)
 
+    const unseen = folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태
+    const replaceFold = linkMode() === 'replace';                // Fold 대체 모드면 별도 fold 아이콘은 숨김
+
     mes.classList.toggle('mf-folded', collapsed);
     mes.classList.toggle('mf-pinned', folded);
+    mes.classList.toggle('mf-unseen', collapsed && unseen);
 
     // 액션 아이콘: 저장 상태에 따라 두 버튼 중 하나만 보이게 (hide/unhide 와 같은 방식)
     const foldBtn = mes.querySelector('.mes_fold');
@@ -140,11 +180,11 @@ function render(mes) {
         foldBtn.classList.remove(ICON_UNSET);
         foldBtn.classList.add(ICON_SET);
         foldBtn.title = TITLE_SET;
-        foldBtn.style.display = folded ? 'none' : '';
+        foldBtn.style.display = (folded || replaceFold) ? 'none' : '';
     }
     const unfoldBtn = mes.querySelector('.mes_unfold');
     if (unfoldBtn) {
-        unfoldBtn.style.display = folded ? '' : 'none';
+        unfoldBtn.style.display = (folded && !replaceFold) ? '' : 'none';
     }
 
     // 높이만 풀어줌 (display/padding/폭은 테마 그대로 유지)
@@ -160,9 +200,13 @@ function render(mes) {
         if (collapsed) {
             const { name, snippet } = makePreview(id);
             ph.replaceChildren();
-            // 숨김(hide) 처리된 메시지(is_system)는 유령 아이콘, 그 외는 ▶
+            // comment 는 말풍선 아이콘, 숨김(hide) 처리된 메시지(is_system)는 유령 아이콘, 그 외는 ▶
             let arrow;
-            if (chat[id]?.is_system) {
+            if (isComment(chat[id])) {
+                arrow = document.createElement('i');
+                arrow.className = 'fa-solid fa-comment-dots';
+                arrow.title = 'Comment';
+            } else if (chat[id]?.is_system) {
                 arrow = document.createElement('i');
                 arrow.className = 'fa-solid fa-ghost';
                 arrow.title = 'Hidden message';
@@ -218,7 +262,42 @@ function decorate(mes) {
     render(mes);
 }
 
+// 슬래시 명령어로 만든 메시지(/comment, /sendas 등)를 자동으로 접고 / 숨김 (메시지마다 각각 딱 한 번만)
+function autoProcessComments() {
+    const st = settings();
+    if (!st.autoFoldComments && !st.autoHideComments) return;
+
+    let changed = false;
+    const toHide = [];
+    chat.forEach((msg, id) => {
+        if (!isSlashMade(msg)) return;
+        if (st.autoFoldComments && !msg.extra[AUTO_KEY]) {
+            msg.extra[AUTO_KEY] = true;
+            msg.extra[KEY] = true;
+            msg.extra[UNSEEN_KEY] = true;
+            changed = true;
+        }
+        if (st.autoHideComments && !msg.extra[AUTO_HIDE_KEY]) {
+            msg.extra[AUTO_HIDE_KEY] = true;
+            changed = true;
+            if (!msg.is_system) toHide.push(id);   // comment 는 원래 is_system 이라 이미 숨김 상태
+        }
+    });
+    if (changed) saveChatConditional();
+
+    // 숨김은 SillyTavern 의 /hide 를 그대로 사용 (DOM, 저장 처리를 맡김)
+    if (toHide.length) {
+        const { executeSlashCommandsWithOptions } = ctx();
+        (async () => {
+            for (const id of toHide) {
+                try { await executeSlashCommandsWithOptions(`/hide ${id}`); } catch (e) { console.warn('[Message Fold] auto-hide failed', id, e); }
+            }
+        })();
+    }
+}
+
 function refreshAll() {
+    autoProcessComments();
     document.querySelectorAll('#chat .mes').forEach(decorate);
 }
 
@@ -232,18 +311,32 @@ function scheduleRefresh() {
     });
 }
 
+// 저장 상태만 바꿈 (저장 호출은 호출한 쪽에서). 실제로 바뀌었으면 true
+function setFold(id, value) {
+    const msg = chat[id];
+    if (!msg) return false;
+    if (isFolded(id) === value) return false;
+
+    msg.extra ??= {};
+    if (value) {
+        msg.extra[KEY] = true;
+    } else {
+        delete msg.extra[KEY];
+        delete msg.extra[UNSEEN_KEY];   // 접기 해제하면 색 덧입힘도 같이 제거
+    }
+    if (openId === id) openId = null;
+
+    const mes = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    if (mes) render(mes);
+    return true;
+}
+
 // 접기 설정 / 해제 (저장 상태 변경) - 액션 아이콘 & 길게 누르기 팝업 공용
 async function toggleFold(mes) {
     const id = Number(mes.getAttribute('mesid'));
-    const msg = chat[id];
-    if (!msg) return;
+    if (!chat[id]) return;
 
-    msg.extra ??= {};
-    if (msg.extra[KEY]) {
-        delete msg.extra[KEY];   // 해제
-    } else {
-        msg.extra[KEY] = true;   // 설정 → 바로 접히게
-    }
+    setFold(id, !isFolded(id));
     openId = null;
 
     render(mes);
@@ -254,6 +347,14 @@ async function toggleFold(mes) {
 function openTemp(mes) {
     const id = Number(mes.getAttribute('mesid'));
     if (Number.isNaN(id) || !isFolded(id)) return;
+
+    // 자동 접힘 후 처음 누르는 순간 → 색 덧입힘 변수 제거
+    const extra = chat[id]?.extra;
+    if (extra?.[UNSEEN_KEY]) {
+        delete extra[UNSEEN_KEY];
+        saveChatConditional();
+    }
+
     if (openId === id) return;
     openId = id;
     refreshAll();
@@ -541,6 +642,18 @@ async function showLongPressMenu(mes) {
     const CUSTOM_FOLD = POPUP_RESULT?.CUSTOM2 ?? 1002;
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
 
+    // 연동 모드: 'replace' 면 Hide/Fold 버튼을 하나로 합침, 'keep' 이면 두 버튼 그대로 (hide 시 fold 도 같이 적용)
+    // comment 는 원래 system 메시지라 연동 대상에서 제외 (replace 에서는 Fold 만 표시)
+    const mode = linkMode();
+    const comment = isComment(chat[id]);
+    const linked = !!mode && !comment;
+    const foldButton = { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD };
+    const hideButton = { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE };
+    let customButtons;
+    if (mode === 'replace' && comment) customButtons = [foldButton];
+    else if (mode === 'replace') customButtons = [{ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE }];
+    else customButtons = [hideButton, foldButton];
+
     let action = null; // 'delete' | 'hide' | 'fold' | null
     if (callGenericPopup && POPUP_TYPE) {
         // OK 버튼(빨간색) = Delete.
@@ -549,10 +662,7 @@ async function showLongPressMenu(mes) {
             okButton: 'Delete',
             cancelButton: 'Cancel',
             defaultResult: RESULT_CANCEL,   // Enter / 기본 포커스는 Cancel (실수로 삭제 방지)
-            customButtons: [
-                { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE },
-                { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD },
-            ],
+            customButtons,
         });
         if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
         else if (result === CUSTOM_HIDE) action = 'hide';
@@ -570,6 +680,7 @@ async function showLongPressMenu(mes) {
     } else if (action === 'hide') {
         // hide 는 is_system = true, unhide 는 false 로 저장됩니다.
         await executeSlashCommandsWithOptions(`/${hidden ? 'unhide' : 'hide'} ${id}`);
+        if (linked && setFold(id, !hidden)) await saveChatConditional();   // 연동: hide→fold, unhide→unfold
         if (mes.isConnected) render(mes);   // 접힌 바의 유령 아이콘 갱신
     } else {
         await executeSlashCommandsWithOptions(`/cut ${id}`);
@@ -739,7 +850,149 @@ function initLongPress(chatEl) {
     });
 }
 
+// ===================== /fold, /unfold =====================
+
+// "3" / "2-5" / "4-" (4번부터 끝까지) → { start, end }
+function parseRange(text) {
+    const m = String(text ?? '').trim().match(/^(\d+)(?:\s*-\s*(\d*))?$/);
+    if (!m) return null;
+    const last = chat.length - 1;
+    const start = Number(m[1]);
+    const end = m[2] === undefined ? start : (m[2] === '' ? last : Number(m[2]));
+    if (start > end || start > last) return null;
+    return { start, end: Math.min(end, last) };
+}
+
+async function foldCommand(value, fold) {
+    const range = parseRange(value);
+    if (!range) {
+        window.toastr?.warning(`Specify a message index or range. e.g. /${fold ? 'fold' : 'unfold'} 3, 2-5, 4-`);
+        return '';
+    }
+    let changed = false;
+    for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
+    if (changed) await saveChatConditional();
+    return '';
+}
+
+function registerSlashCommands() {
+    const { SlashCommandParser, SlashCommand, SlashCommandArgument, ARGUMENT_TYPE } = ctx();
+    if (!SlashCommandParser?.addCommandObject || !SlashCommand?.fromProps) {
+        console.warn('[Message Fold] Slash command API not found; /fold, /unfold not registered.');
+        return;
+    }
+    const mkArg = () => SlashCommandArgument.fromProps({
+        description: 'message index or range (e.g. 3, 2-5, 4-)',
+        typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
+        isRequired: true,
+    });
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'fold',
+        callback: (_args, value) => foldCommand(value, true),
+        unnamedArgumentList: [mkArg()],
+        helpString: 'Folds (collapses) a message or a range of messages. Example: <code>/fold 3</code>, <code>/fold 2-5</code>, <code>/fold 4-</code>',
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'unfold',
+        callback: (_args, value) => foldCommand(value, false),
+        unnamedArgumentList: [mkArg()],
+        helpString: 'Unfolds a message or a range of messages. Example: <code>/unfold 3</code>, <code>/unfold 2-5</code>',
+    }));
+}
+
+// ===================== 확장 패널 =====================
+
+function initSettingsPanel() {
+    const host = document.getElementById('extensions_settings2') || document.getElementById('extensions_settings');
+    if (!host || document.getElementById('mf-settings')) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'mf-settings';
+    wrap.className = 'mf-settings';
+    wrap.innerHTML = `
+        <div class="inline-drawer">
+            <div class="inline-drawer-toggle inline-drawer-header">
+                <b>Message Fold &amp; Delete</b>
+                <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+            </div>
+            <div class="inline-drawer-content">
+                <fieldset class="mf-box">
+                    <legend><i class="fa-solid fa-eye"></i>Hide &amp; Fold</legend>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_link_hide_fold">
+                            <span class="mf-opt-title">Link Hide &amp; Fold</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_link_hide_fold"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Hiding a message also folds it, and unhiding also unfolds it. Works with /hide, /unhide, the hide icon and the long-press popup.</small>
+                        <div id="mf_link_modes" class="mf-modes">
+                            <label class="mf-radio">
+                                <input type="radio" name="mf_link_mode" value="keep">
+                                <span><span class="mf-radio-title">Keep Fold button</span><small class="mf-desc">Fold and Unfold stay as their own buttons.</small></span>
+                            </label>
+                            <label class="mf-radio">
+                                <input type="radio" name="mf_link_mode" value="replace">
+                                <span><span class="mf-radio-title">Replace Fold button</span><small class="mf-desc">Hide and Fold merge into one "Hide &amp; Fold" button.</small></span>
+                            </label>
+                        </div>
+                    </div>
+                </fieldset>
+                <fieldset class="mf-box">
+                    <legend><i class="fa-solid fa-bolt"></i>Auto Fold &amp; Hide Comments</legend>
+                    <small class="mf-desc mf-intro">Only affects comment-style messages, the ones created by slash commands like /comment and /sendas. Normal chat replies are never touched.</small>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_auto_fold_comments">
+                            <span class="mf-opt-title">Auto-fold</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_auto_fold_comments"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Folds them as soon as they appear. The bar stays tinted until you open it for the first time.</small>
+                    </div>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_auto_hide_comments">
+                            <span class="mf-opt-title">Auto-hide</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_auto_hide_comments"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Hides them too, so they are left out of the prompt.</small>
+                    </div>
+                </fieldset>
+            </div>
+        </div>`;
+    host.append(wrap);
+
+    const modes = wrap.querySelector('#mf_link_modes');
+    const syncModes = () => modes.classList.toggle('mf-disabled', !settings().linkHideFold);
+
+    const bind = (id, key, after) => {
+        const el = wrap.querySelector(`#${id}`);
+        el.checked = !!settings()[key];
+        el.addEventListener('change', () => {
+            settings()[key] = el.checked;
+            ctx().saveSettingsDebounced();
+            after?.();
+            scheduleRefresh();
+        });
+    };
+    bind('mf_link_hide_fold', 'linkHideFold', syncModes);
+    bind('mf_auto_fold_comments', 'autoFoldComments');
+    bind('mf_auto_hide_comments', 'autoHideComments');
+
+    // Fold 버튼 유지 / 대체 (라디오)
+    const current = settings().linkMode === 'keep' ? 'keep' : 'replace';
+    for (const r of wrap.querySelectorAll('input[name="mf_link_mode"]')) {
+        r.checked = r.value === current;
+        r.addEventListener('change', () => {
+            if (!r.checked) return;
+            settings().linkMode = r.value;
+            ctx().saveSettingsDebounced();
+            scheduleRefresh();
+        });
+    }
+    syncModes();
+}
+
 jQuery(() => {
+    initSettingsPanel();
+    registerSlashCommands();
+
     const chatEl = document.getElementById('chat');
     if (!chatEl) return;
 
@@ -757,6 +1010,23 @@ jQuery(() => {
     });
 
     new MutationObserver(scheduleRefresh).observe(chatEl, { childList: true });
+
+    // Hide & Fold 연동: SillyTavern 이 hide/unhide 할 때 바꾸는 .mes 의 is_system 속성을 감시
+    // (/hide, /unhide, 기본 hide 아이콘, 이 확장의 팝업 모두 여기서 잡힘)
+    new MutationObserver((records) => {
+        if (!settings().linkHideFold) return;
+        let changed = false;
+        for (const r of records) {
+            const mes = r.target;
+            if (!(mes instanceof Element) || !mes.matches('.mes')) continue;
+            const now = mes.getAttribute('is_system');
+            if (now === r.oldValue) continue;
+            const id = Number(mes.getAttribute('mesid'));
+            if (Number.isNaN(id) || !chat[id] || isComment(chat[id])) continue;
+            changed = setFold(id, now === 'true') || changed;
+        }
+        if (changed) saveChatConditional();
+    }).observe(chatEl, { subtree: true, attributes: true, attributeFilter: ['is_system'], attributeOldValue: true });
 
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
     ['CHAT_CHANGED', 'MESSAGE_DELETED'].forEach((name) => {
