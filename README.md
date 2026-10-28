@@ -60,7 +60,7 @@ Add the following to Custom CSS if needed.
 * "Replace all" is case-sensitive and searches the whole saved message, including parts not visible on screen such as markdown marks.
 * Automatic processing is applied once per message. A message that is unfolded or unhidden manually is not processed again.
 * When an auto option is turned on, matching messages already in the current chat are processed as well.
-* Auto Fold & Hide targets are identified by the saved message data (`extra.model` is `slash command`, or `extra.type` is `comment`).
+* Auto Fold & Hide targets are identified by the saved message data (`model` is `slash command`, or `type` is `comment`).
 * On some mobile browsers, the browser's own long press behavior may take priority over the selected text menu.
 
 <br><br><br><br>
@@ -127,5 +127,5 @@ Add the following to Custom CSS if needed.
 * "모두 바꾸기"는 대소문자를 구분하며, 마크다운 표시처럼 화면에 보이지 않는 부분을 포함해 저장된 메시지 전체에서 찾습니다.
 * 자동 처리는 메시지마다 한 번만 적용됩니다. 직접 펼치거나 숨김을 해제한 메시지는 다시 처리되지 않습니다.
 * 자동 옵션을 켜면 현재 채팅에 이미 있는 대상 메시지도 함께 처리됩니다.
-* 자동 처리 대상은 저장된 메시지 데이터로 판별합니다 (`extra.model`이 `slash command`이거나 `extra.type`이 `comment`인 메시지).
+* 자동 처리 대상은 저장된 메시지 데이터로 판별합니다 (`model`이 `slash command`이거나 `type`이 `comment`인 메시지).
 * 일부 모바일 브라우저에서는 브라우저 자체의 길게 누르기 동작이 먼저 실행되어 선택한 글자 메뉴가 표시되지 않을 수 있습니다.
