@@ -233,6 +233,29 @@
     padding-bottom: 0;
 }
 
+/* 제목 오른쪽에 초기화 버튼이 붙는 줄 */
+.mf-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--mf-sp) * 3);
+}
+
+.mf-reset {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: calc(var(--mf-sp) * 1) calc(var(--mf-sp) * 2);
+    background: none;
+    border: 0;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+}
+
+.mf-reset:hover {
+    opacity: 1;
+}
+
 /* 길게 누르기 시간 슬라이더 한 줄: 이름 / 슬라이더 / 값 */
 .mf-range {
     display: flex;

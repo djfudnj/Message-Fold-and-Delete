@@ -1062,7 +1062,10 @@ function initSettingsPanel() {
                         <small class="mf-desc">Select text, then press and hold the selection to edit or delete just that part.</small>
                     </div>
                     <div class="mf-item">
-                        <div class="mf-head">Hold time</div>
+                        <div class="mf-head mf-head-row">
+                            <span>Hold time</span>
+                            <button type="button" class="mf-reset" id="mf_hold_reset" title="Reset hold time to default" aria-label="Reset hold time to default"><i class="fa-solid fa-rotate-left"></i></button>
+                        </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
                             <input type="range" id="mf_hold_mouse" min="500" max="1000" step="10">
@@ -1129,14 +1132,29 @@ function initSettingsPanel() {
         const show = () => { val.textContent = `${el.value} ms`; };
         el.value = holdTime(settings()[key], fallback);
         show();
-        el.addEventListener('input', show);
-        el.addEventListener('change', () => {
+        const save = () => {
             settings()[key] = Number(el.value);
             ctx().saveSettingsDebounced();
-        });
+        };
+        // 움직이는 동안에도 저장 (change 이벤트가 안 오는 환경 대비), 손을 떼면 한 번 더 저장
+        el.addEventListener('input', () => { show(); save(); });
+        el.addEventListener('change', save);
+        return { el, show };
     };
-    bindRange('mf_hold_mouse', 'holdMouse', 610);
-    bindRange('mf_hold_touch', 'holdTouch', 750);
+    const holdSliders = [
+        { ...bindRange('mf_hold_mouse', 'holdMouse', DEFAULTS.holdMouse), key: 'holdMouse' },
+        { ...bindRange('mf_hold_touch', 'holdTouch', DEFAULTS.holdTouch), key: 'holdTouch' },
+    ];
+
+    // 길게 누르기 시간 기본값으로 되돌리기
+    wrap.querySelector('#mf_hold_reset').addEventListener('click', () => {
+        for (const { el, show, key } of holdSliders) {
+            el.value = DEFAULTS[key];
+            settings()[key] = DEFAULTS[key];
+            show();
+        }
+        ctx().saveSettingsDebounced();
+    });
 
     // 접이식 박스 (옵시디언 콜아웃처럼 기본은 접힘): 제목 또는 안내 문구를 누르면 펼침/접힘
     for (const box of wrap.querySelectorAll('.mf-collapsible')) {
