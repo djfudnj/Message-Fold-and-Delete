@@ -8,70 +8,80 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 <img width="1053" height="411" alt="화면 캡처 2026-10-21 175828" src="https://github.com/user-attachments/assets/f89acdad-bbed-47e8-8ac7-21666090124d" />
 </div>
 
-* **Fold / Unfold** – Click the fold icon in a message's action buttons to collapse the message into a slim bar. The fold icon is the leftmost icon of the message actions.
-* **Peek** – Tap a folded bar to open it temporarily. Tap elsewhere to fold it again. To release the fold completely, click the unfold icon.
+* **Fold / Unfold** – Click the fold icon in the message action buttons to collapse the message into a slim bar.
+* **Peek (Temporary unfold)** – Tap a folded bar to open it temporarily. Depending on your settings, clicking outside or double-clicking the message folds it again. To unfold permanently, click the unfold icon.
 
 <div align="center">
 <img width="651" height="275" alt="화면 캡처 2026-10-21 175751" src="https://github.com/user-attachments/assets/d329bf1c-bead-48cb-b85b-619a9e39f9f6" />
 </div>
 
-* **Long press menu** – Press and hold a message to open a popup: Hide / Unhide, Fold / Unfold, Delete, Cancel. Delete works like SillyTavern's built-in "Delete this message", without opening the edit window first.
+* **Long-press message menu** – Press and hold a message to open a popup: **Delete**, **Hide (Unhide)**, **Fold (Unfold)**, and **Cancel**. On mobile, a visual border feedback appears before the popup opens.
 
 <div align="center">
 <img width="50%" alt="20261021_225652" src="https://github.com/user-attachments/assets/6a809379-6d98-4381-adad-e3992c9c2a3c" />
 </div>
 
-* **Selected text menu** – Select text inside a message, then press and hold to open a popup: Edit selection, Delete selection, Cancel.
-* **Replace all** – If the selected text appears more than once in the message, Edit selection shows a "Replace all" checkbox. Every occurrence in that message is replaced at once.
-* **`/fold` and `/unfold` commands** – Work like `/hide`, with a message index or a range.
+* **Selected text menu** – Select text inside a message, then press and hold the selection to open a popup: **Edit selection**, **Delete selection**, and **Cancel**.
+* **Replace all** – When editing selected text that appears multiple times in the message, check "Replace all" to replace every occurrence at once.
+* **`/fold` and `/unfold` commands** – Supports single message indices or ranges:
   * `/fold 3` : message 3
   * `/fold 2-5` : messages 2 to 5
-  * `/fold 4-` : message 4 to the last message
-* **Link Hide & Fold** – Hiding a message also folds it, and unhiding it also unfolds it. This applies to `/hide`, `/unhide`, the built-in hide icon and the long press popup.
-* **Auto Fold & Hide Comments** – Messages created by slash commands, such as `/comment` and `/sendas`, are folded and/or hidden automatically. Normal chat replies are not affected.
+* **Link Hide & Fold** – Hiding a message automatically folds it, and unhiding unfolds it.
+* **Auto Fold & Hide** – Automatically fold and/or hide newly generated messages (slash commands or character replies).
 
-## Optional Settings
+## Settings Panel
 
-Open the Extensions panel and select **Message Fold & Delete**.
+Open the Extensions panel (`Extensions` → `Message Fold & Delete`) to configure options:
 
-**Hide & Fold**
+### 1. Hide & Fold
+* **Link Hide & Fold** – Links message hiding and folding together.
+  * **Keep Fold button** – Keeps Hide and Fold as separate buttons.
+  * **Replace Fold button** – Merges them into a single "Hide & Fold" (or "Unhide & Unfold") button.
 
-* **Link Hide & Fold** – Turns the link on or off. When on, one of the following can be selected.
-  * **Keep Fold button** – Fold and Unfold remain as separate buttons.
-  * **Replace Fold button** – Hide and Fold are merged into a single "Hide & Fold" (or "Unhide & Unfold") button. The separate fold icon is removed from the message actions.
+### 2. Auto Fold & Hide
+* **Target messages**
+  * **Comments only** – Only applies to slash-command messages (e.g., `/comment`, `/sendas`).
+  * **All non-user messages** – Applies to all incoming character replies and slash-command messages (your own user messages are never affected).
+* **Auto-fold** – Folds target messages as soon as they appear.
+* **Auto-hide** – Hides target messages so they are excluded from context/prompts.
 
-**Auto Fold & Hide Comments**
+### 3. Delete & Edit
+* **Long-press message menu** – Enable or disable the message long-press menu.
+* **Selection edit & delete** – Enable or disable the long-press menu on selected text.
+* **Hold time** – Adjust how long to press before the popup triggers (Mouse / Touch: 500ms – 1000ms).
 
-* **Auto-fold** – Folds the target messages as soon as they appear. The bar stays tinted until it is opened for the first time.
-* **Auto-hide** – Hides the target messages, so that they are left out of the prompt.
+### 4. Other Settings
+* **Tint unread folded messages** – Applies a soft theme tint to automatically folded bars until you click them for the first time.
+* **Close an expanded message**
+  * **Click elsewhere** – Clicking anywhere outside the message closes it.
+  * **Double-click the message** – Double-clicking (or double-tapping) the message itself closes it.
 
 ## Customization
 
-Add the following to Custom CSS if needed.
+Add the following to **Custom CSS** if needed:
 
 ```css
 :root {
-    --mf-min-height: 40px;   /* minimum height of a folded bar */
-    --mf-gap: 6px;           /* gap between folded bars */
-    --mf-tint-alpha: 20%;    /* strength of the tint on unopened auto-folded bars */
-    --mf-tint-color: #4aa;   /* tint color (default: --SmartThemeQuoteColor) */
+    --mf-min-height: 40px;   /* Minimum height of a folded bar */
+    --mf-gap: 6px;           /* Gap between folded bars */
+    --mf-tint-alpha: 20%;    /* Tint opacity for unread auto-folded bars */
+    --mf-tint-color: #4aa;   /* Tint color (default: --SmartThemeQuoteColor) */
 }
 ```
 
 ## Notes
 
-* Text is matched against the message's saved source. Text that differs on screen (macros such as {{user}}, regex scripts) and selections that span multiple paragraphs may not be found. In that case a warning is shown and nothing is changed.
-* "Replace all" is case-sensitive and searches the whole saved message, including parts not visible on screen such as markdown marks.
-* Automatic processing is applied once per message. A message that is unfolded or unhidden manually is not processed again.
-* When an auto option is turned on, matching messages already in the current chat are processed as well.
-* Auto Fold & Hide targets are identified by the saved message data (`model` is `slash command`, or `type` is `comment`).
-* On some mobile browsers, the browser's own long press behavior may take priority over the selected text menu.
+* **Text replacement source matching**: Replacements are matched against the raw saved message source. If text differs due to display macros (e.g. `{{user}}`) or regex scripts, a warning will appear and no changes will be made.
+
+## License
+
+AGPL-3.0
 
 <br><br><br><br>
 
 # Message Fold and Delete
 
-메시지를 한 줄 바로 접고, 길게 눌러서 메시지나 선택한 글자를 관리하는 SillyTavern 확장입니다.
+메시지를 얇은 한 줄 바로 접고, 길게 눌러 메시지나 선택한 텍스트를 손쉽게 관리하는 SillyTavern 확장 기능입니다.
 
 ## 주요 기능
 
@@ -79,61 +89,75 @@ Add the following to Custom CSS if needed.
 <img width="1053" height="411" alt="화면 캡처 2026-10-21 175828" src="https://github.com/user-attachments/assets/f89acdad-bbed-47e8-8ac7-21666090124d" />
 </div>
 
-* **접기 / 펼치기** – 메시지 액션 버튼의 접기 아이콘을 누르면 메시지가 얇은 바로 접힙니다. 접기 아이콘은 메시지 액션의 가장 왼쪽에 있습니다.
-* **미리보기** – 접힌 바를 누르면 임시로 펼쳐지고, 다른 곳을 누르면 다시 접힙니다. 접힘을 완전히 해제하려면 펼치기 아이콘을 누릅니다.
+* **접기 / 펼치기** – 메시지 액션 버튼의 접기 아이콘을 누르면 메시지가 한 줄 바로 접힙니다.
+* **미리보기 (임시 펼치기)** – 접힌 바를 누르면 임시로 펼쳐집니다. 설정에 따라 바깥을 누르거나 메시지를 더블클릭(더블탭)하면 다시 접힙니다. 영구히 펼치려면 펼치기 아이콘을 누릅니다.
 
 <div align="center">
 <img width="651" height="275" alt="화면 캡처 2026-10-21 175751" src="https://github.com/user-attachments/assets/d329bf1c-bead-48cb-b85b-619a9e39f9f6" />
 </div>
 
-* **길게 누르기 메뉴** – 메시지를 길게 누르면 팝업이 표시됩니다: Hide / Unhide, Fold / Unfold, Delete, Cancel. Delete는 SillyTavern 기본 "메시지 삭제"와 동일하게 동작하며, 편집 창을 먼저 열 필요가 없습니다.
+* **길게 누르기 메뉴** – 메시지를 길게 누르면 팝업이 표시됩니다: **삭제(Delete)**, **숨기기/해제(Hide/Unhide)**, **접기/해제(Fold/Unfold)**, **취소(Cancel)**. 모바일 환경에서는 팝업 직전에 테두리 애니메이션 피드백이 표시됩니다.
 
 <div align="center">
 <img width="50%" alt="20261021_225652" src="https://github.com/user-attachments/assets/6a809379-6d98-4381-adad-e3992c9c2a3c" />
 </div>
 
-* **선택한 글자 메뉴** – 메시지 안의 글자를 선택한 뒤 길게 누르면 팝업이 표시됩니다: Edit selection, Delete selection, Cancel.
-* **모두 바꾸기** – 선택한 글자가 메시지 안에 여러 번 있으면 Edit selection 창에 "Replace all" 체크박스가 표시됩니다. 해당 메시지 안의 모든 일치 항목이 한 번에 바뀝니다.
-* **`/fold`, `/unfold` 명령어** – `/hide`와 같은 방식으로 메시지 번호 또는 범위를 지정합니다.
-  * `/fold 3` : 3번 메시지
-  * `/fold 2-5` : 2번부터 5번까지
-  * `/fold 4-` : 4번부터 마지막 메시지까지
-* **Hide & Fold 연동** – 메시지를 숨기면 함께 접히고, 숨김을 해제하면 함께 펼쳐집니다. `/hide`, `/unhide`, 기본 숨김 아이콘, 길게 누르기 팝업에 모두 적용됩니다.
-* **코멘트 자동 접기 및 숨기기** – `/comment`, `/sendas` 등 슬래시 명령어로 생성된 메시지를 자동으로 접거나 숨깁니다. 일반 채팅 답변에는 적용되지 않습니다.
+* **선택한 글자 메뉴** – 텍스트를 드래그하여 선택한 뒤 길게 누르면 **글자 편집(Edit)** 및 **삭제(Delete)** 팝업이 뜹니다.
+* **모두 바꾸기 (Replace all)** – 선택한 글자가 해당 메시지 안에 여러 번 나오면 "모두 바꾸기" 체크박스를 통해 한 번에 일괄 수정할 수 있습니다.
+* **`/fold`, `/unfold` 명령어** – `/hide`처럼 번호나 범위를 지정하여 접고 펼칠 수 있습니다.
+  * `/fold 3` : 3번 메시지 접기
+  * `/fold 2-5` : 2번부터 5번까지 접기
+* **Hide & Fold 연동** – 메시지를 숨기면 자동으로 접히고, 숨김을 해제하면 자동으로 펼쳐집니다.
+* **자동 접기 및 숨기기** – 새로 생성되는 메시지(슬래시 명령어 또는 캐릭터 답변)를 조건에 따라 자동으로 접거나 숨깁니다.
 
-## 추가 설정
+## 확장 설정 (Settings)
 
-확장 패널에서 **Message Fold & Delete**를 선택합니다.
+<div align="center">
+<img width="507" height="691" alt="image" src="https://github.com/user-attachments/assets/bba811cc-d60d-4dbd-9fa7-9668bbda245e" />
+</div>
 
-**Hide & Fold**
+확장 패널(`Extensions` → **Message Fold & Delete**)에서 설정할 수 있습니다.
 
-* **Link Hide & Fold** – 연동을 켜고 끕니다. 켜면 아래 중 하나를 선택할 수 있습니다.
-  * **Keep Fold button** – Fold, Unfold 버튼을 그대로 유지합니다.
-  * **Replace Fold button** – Hide와 Fold를 "Hide & Fold"(또는 "Unhide & Unfold") 버튼 하나로 합칩니다. 메시지 액션의 별도 접기 아이콘은 제거됩니다.
+### 1. Hide & Fold (숨김 & 접기 연동)
+* **Link Hide & Fold** – 연동 기능 On/Off
+  * **Keep Fold button** – Fold/Unfold 버튼을 별도로 유지합니다.
+  * **Replace Fold button** – Hide와 Fold를 "Hide & Fold" 단일 버튼으로 통합합니다.
 
-**Auto Fold & Hide Comments**
+### 2. Auto Fold & Hide (자동 접기 & 숨기기)
+* **Target messages (대상 선택)**
+  * **Comments only** – `/comment`, `/sendas` 등 슬래시 명령어로 만든 메시지만 대상
+  * **All non-user messages** – 유저 메시지를 제외한 캐릭터의 모든 답변 및 메시지 대상
+* **Auto-fold** – 대상 메시지가 생성되면 즉시 접습니다.
+* **Auto-hide** – 대상 메시지를 숨겨 프롬프트 전송에서 제외합니다.
 
-* **Auto-fold** – 대상 메시지를 생성 즉시 접습니다. 처음 열기 전까지 바에 색이 덧입혀져 표시됩니다.
-* **Auto-hide** – 대상 메시지를 숨겨 프롬프트에서 제외합니다.
+### 3. Delete & Edit (길게 누르기 설정)
+* **Long-press message menu** – 메시지 길게 누르기 팝업 On/Off
+* **Selection edit & delete** – 선택 글자 길게 누르기 팝업 On/Off
+* **Hold time** – 팝업이 뜨기까지 길게 누르는 시간 설정 (마우스 / 터치 각각 500ms ~ 1000ms 조절 가능)
 
-## 사용자 설정
+### 4. Other Settings (기타 설정)
+* **Tint unread folded messages** – 자동 접힘 후 사용자가 아직 눌러보지 않은 바에 인용문 색상 틴트를 덧입힙니다. (첫 클릭 시 해제)
+* **Close an expanded message (펼친 메시지 닫기)**
+  * **Click elsewhere** – 메시지 바깥 아무 곳이나 클릭/탭하면 다시 접힘 (기본값)
+  * **Double-click the message** – 해당 메시지를 더블클릭(더블탭)해야 다시 접힘 (바깥 클릭 방지)
 
-필요한 경우 Custom CSS에 다음을 추가합니다.
+## 사용자 커스텀 (CSS)
+
+필요한 경우 **Custom CSS**에 추가하여 스타일을 변경할 수 있습니다:
 
 ```css
 :root {
     --mf-min-height: 40px;   /* 접힌 바의 최소 높이 */
-    --mf-gap: 6px;           /* 접힌 바 사이 간격 */
-    --mf-tint-alpha: 20%;    /* 열어보지 않은 자동 접힘 바의 색 덧입힘 진하기 */
-    --mf-tint-color: #4aa;   /* 덧입힘 색 (기본값: --SmartThemeQuoteColor) */
+    --mf-gap: 6px;           /* 접힌 바 사이의 상하 간격 */
+    --mf-tint-alpha: 20%;    /* 미확인 자동 접힘 바 색상 덧입힘 투명도 */
+    --mf-tint-color: #4aa;   /* 덧입힘 색상 (기본값: 테마 인용문 색상) */
 }
 ```
 
 ## 참고 사항
 
-* 화면에 보이는 글자를 저장된 원문에서 찾아 바꾸므로, 매크로({{user}})나 정규식으로 화면과 원문이 달라진 부분과 여러 문단에 걸친 선택은 찾지 못할 수 있습니다. 이 경우 안내 메시지가 표시되고 아무것도 바뀌지 않습니다.
-* "모두 바꾸기"는 대소문자를 구분하며, 마크다운 표시처럼 화면에 보이지 않는 부분을 포함해 저장된 메시지 전체에서 찾습니다.
-* 자동 처리는 메시지마다 한 번만 적용됩니다. 직접 펼치거나 숨김을 해제한 메시지는 다시 처리되지 않습니다.
-* 자동 옵션을 켜면 현재 채팅에 이미 있는 대상 메시지도 함께 처리됩니다.
-* 자동 처리 대상은 저장된 메시지 데이터로 판별합니다 (`model`이 `slash command`이거나 `type`이 `comment`인 메시지).
-* 일부 모바일 브라우저에서는 브라우저 자체의 길게 누르기 동작이 먼저 실행되어 선택한 글자 메뉴가 표시되지 않을 수 있습니다.
+* **원문 매칭**: 선택 글자 편집/삭제는 저장된 메시지 원문을 기준으로 처리됩니다. 매크로(`{{user}}`)나 정규식 스크립트로 인해 화면 렌더링과 원문이 달라진 경우에는 원문을 찾지 못해 수정이 취소될 수 있습니다.
+
+## License
+
+AGPL-3.0
