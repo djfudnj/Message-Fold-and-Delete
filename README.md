@@ -31,6 +31,10 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 
 ## Settings Panel
 
+<div align="center">
+<img width="507" height="691" alt="image" src="https://github.com/user-attachments/assets/bba811cc-d60d-4dbd-9fa7-9668bbda245e" />
+</div>
+
 Open the Extensions panel (`Extensions` → `Message Fold & Delete`) to configure options:
 
 ### 1. Hide & Fold
