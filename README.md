@@ -21,6 +21,7 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 <img width="50%" alt="20261021_225652" src="https://github.com/user-attachments/assets/6a809379-6d98-4381-adad-e3992c9c2a3c" />
 </div>
 
+
 * **Selected text menu** – Select text inside a message, then press and hold the selection to open a popup: **Edit selection**, **Delete selection**, and **Cancel**.
 * **Replace all** – When editing selected text that appears multiple times in the message, check "Replace all" to replace every occurrence at once.
 * **`/fold` and `/unfold` commands** – Supports single message indices or ranges:
@@ -32,7 +33,7 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 ## Settings Panel
 
 <div align="center">
-<img width="507" height="691" alt="image" src="https://github.com/user-attachments/assets/bba811cc-d60d-4dbd-9fa7-9668bbda245e" />
+<img width="506" height="882" alt="image" src="https://github.com/user-attachments/assets/59e02f75-1a8f-4e80-8b20-ad1f986f99e6" />
 </div>
 
 Open the Extensions panel (`Extensions` → `Message Fold & Delete`) to configure options:
@@ -117,7 +118,7 @@ AGPL-3.0
 ## 확장 설정 (Settings)
 
 <div align="center">
-<img width="507" height="691" alt="image" src="https://github.com/user-attachments/assets/bba811cc-d60d-4dbd-9fa7-9668bbda245e" />
+<img width="506" height="882" alt="image" src="https://github.com/user-attachments/assets/59e02f75-1a8f-4e80-8b20-ad1f986f99e6" />
 </div>
 
 확장 패널(`Extensions` → **Message Fold & Delete**)에서 설정할 수 있습니다.
