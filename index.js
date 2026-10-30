@@ -10,6 +10,10 @@
 //  - 글자를 드래그로 선택한 뒤, 손을 떼고 선택된 글자 위를 다시 길게 누르면
 //    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
 //  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
+//  - 선택한 글자가 저장된 텍스트에 그대로 없으면(마크다운/XML/정규식 등으로 화면이 달라진 경우)
+//    SillyTavern 본체의 messageFormatting 으로 <p> 문단을 맞춰서 해당 문단을 통째로 편집합니다. (실패하면 메시지 통째 편집)
+//  - 번역문(extra.display_text)이 있는 메시지는 Edit translation(번역문만 수정, 원문 mes 는 안 바뀜) /
+//    Edit original(원문을 <p> 문단 단위로만 매칭해서 수정) 중에 고를 수 있습니다.
 //  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
@@ -487,7 +491,17 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    return { mes, text, occurrence };
+    // 선택이 <p> 한 개 안에 있으면 그 문단의 위치 정보 (문단 매칭 폴백용). 여러 문단에 걸치면 null
+    const ps = paraList(a);
+    const sp = elOf(range.startContainer)?.closest('p');
+    const ep = elOf(range.endContainer)?.closest('p');
+    let para = null;
+    if (sp && sp === ep) {
+        const i = ps.indexOf(sp);
+        if (i >= 0) para = { index: i, count: ps.length, text: sp.textContent.trim() };
+    }
+
+    return { mes, text, occurrence, para };
 }
 
 // (x, y) 가 현재 선택 영역 위인지
@@ -503,7 +517,7 @@ function pointOnSelection(x, y) {
     return false;
 }
 
-// 화면에 보이는 글자를 저장된 원문(chat[id].mes)에서 찾음
+// 화면에 보이는 글자를 저장된 텍스트(원문 또는 번역문)에서 찾음
 function findInRaw(raw, text, occurrence) {
     const idx = [];
     for (let i = raw.indexOf(text); i !== -1; i = raw.indexOf(text, i + 1)) idx.push(i);
@@ -526,76 +540,175 @@ async function setMessageText(id, next) {
     await saveChatConditional();
 }
 
-async function replaceSelection(id, text, occurrence, replacement) {
-    const raw = String(chat[id]?.mes ?? '');
+// 화면에 보이는 번역문(extra.display_text)만 교체하고 저장. mes(프롬프트에 들어가는 원문)는 건드리지 않음.
+// MESSAGE_EDITED 는 일부러 보내지 않음 (번역 확장이 자동 재번역으로 덮어쓰는 것 방지)
+async function setDisplayText(id, next) {
+    const msg = chat[id];
+    if (!msg) return;
+    msg.extra ??= {};
+    const swipeExtra = Array.isArray(msg.swipe_info) ? msg.swipe_info[msg.swipe_id]?.extra : null;
+    if (next) {
+        msg.extra.display_text = next;
+        if (swipeExtra) swipeExtra.display_text = next;
+    } else {
+        delete msg.extra.display_text;
+        if (swipeExtra) delete swipeExtra.display_text;
+    }
+    updateMessageBlock(id, msg);
+    await eventSource.emit(event_types.MESSAGE_UPDATED, id);
+    await saveChatConditional();
+}
+
+// ----- 편집 대상 필드: 'mes'(원문) / 'display_text'(번역문) -----
+const hasDisplayText = (id) => !!chat[id]?.extra?.display_text;
+const getField = (id, field) => String(field === 'display_text' ? (chat[id]?.extra?.display_text ?? '') : (chat[id]?.mes ?? ''));
+const setField = (id, field, next) => (field === 'display_text' ? setDisplayText(id, next) : setMessageText(id, next));
+
+async function replaceSelection(id, field, text, occurrence, replacement) {
+    const raw = getField(id, field);
     const loc = findInRaw(raw, text, occurrence);
     if (!loc) {
         window.toastr?.warning('Could not locate the selected text in the message source.');
         return;
     }
-    await setMessageText(id, raw.slice(0, loc.start) + replacement + raw.slice(loc.end));
+    await setField(id, field, raw.slice(0, loc.start) + replacement + raw.slice(loc.end));
 }
 
 const countOccurrences = (raw, text) => (text ? raw.split(text).length - 1 : 0);
 
-async function showSelectionMenu(mes, info) {
-    const id = Number(mes.getAttribute('mesid'));
-    if (Number.isNaN(id) || !chat[id]) return;
+// ===================== 문단(<p>) 단위 매칭 =====================
+// 글자가 그대로 일치하지 않을 때(마크다운/XML/정규식/번역) 쓰는 폴백.
+// 우리가 마크다운 규칙을 흉내 내지 않고, SillyTavern 본체의 messageFormatting 을 그대로 돌려서
+// 나온 <p> 개수로 "화면의 n번째 문단 = 저장 텍스트의 n번째 문단" 을 맞춘다.
 
-    const { text, occurrence } = info;
-    const name = chat[id].name || '';
-    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+// <p> 중에서 코드블록/표 안의 것은 양쪽 모두 세지 않음
+const paraList = (root) => [...root.querySelectorAll('p')].filter((p) => !p.closest('pre, table, code'));
 
-    const html = `<h3>Selected text</h3>
-        <div style="text-align:left;opacity:.8;margin-top:8px">
-            <b>#${id}</b> ${escapeHtml(name)}<br>“${escapeHtml(preview)}”
-        </div>`;
+let _fmt = null;
+async function getFormatter() {
+    if (_fmt) return _fmt;
+    try {
+        // 정적 import 로 두면 messageFormatting 이 없는 버전에서 확장 전체가 로드 실패하므로 동적 import
+        const mod = await import('../../../../script.js');
+        if (typeof mod.messageFormatting === 'function') _fmt = mod.messageFormatting;
+    } catch (e) {
+        console.warn('[message-fold] messageFormatting unavailable', e);
+    }
+    return _fmt;
+}
 
-    const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
-    if (!callGenericPopup || !POPUP_TYPE) return;
+// 텍스트를 빈 줄 기준 블록으로 나눔 (코드펜스 안의 빈 줄은 무시). 각 블록의 원문 내 위치를 같이 돌려줌
+function splitBlocks(text) {
+    const blocks = [];
+    let pos = 0, cur = null, fence = null;
+    for (const line of text.split('\n')) {
+        const lineStart = pos;
+        const lineEnd = pos + line.length;
+        pos = lineEnd + 1;
+        const t = line.trim();
+        const fm = /^(```|~~~)/.exec(t);
+        if (fm) {
+            if (!fence) fence = fm[1];
+            else if (fm[1] === fence) fence = null;
+        }
+        if (t === '' && !fence) {
+            if (cur) { blocks.push(cur); cur = null; }
+            continue;
+        }
+        if (!cur) cur = { start: lineStart, end: lineEnd };
+        else cur.end = lineEnd;
+    }
+    if (cur) blocks.push(cur);
+    return blocks.map((b) => ({ ...b, text: text.slice(b.start, b.end) }));
+}
 
-    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM1 ?? 1001;
-    const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
+// 화면에서 고른 문단(para.index)에 대응하는 저장 텍스트 블록을 찾는다. 실패하면 null (→ 메시지 통째 편집)
+async function mapParagraph(id, field, para) {
+    if (!para || para.index < 0) return null;
+    const fmt = await getFormatter();
+    if (!fmt) return null;
+    const msg = chat[id];
+    const val = getField(id, field);
+    const countP = (s) => {
+        const html = fmt(s, msg.name, !!msg.is_system, !!msg.is_user, id);
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');   // 비활성 문서: 이미지 로드/스크립트 실행 없음
+        return paraList(doc.body).length;
+    };
+    try {
+        const blocks = splitBlocks(val);
+        let acc = 0;
+        for (const b of blocks) { b.from = acc; acc += countP(b.text); b.to = acc; }
+        // 검증 1: 블록별로 센 합계 == 통째로 센 개수 (리스트/인용문/정규식 때문에 쪼개면 달라지는 경우 걸러냄)
+        if (acc !== countP(val)) return null;
+        // 검증 2: 화면(DOM)의 문단 수와 같아야 함 (원문 ↔ 번역문 짝이 안 맞거나 정규식이 <p>를 만든 경우 걸러냄)
+        if (acc !== para.count) return null;
+        const hit = blocks.find((b) => para.index >= b.from && para.index < b.to);
+        return hit ? { start: hit.start, end: hit.end, text: hit.text, index: para.index, count: acc } : null;
+    } catch (e) {
+        console.warn('[message-fold] paragraph mapping failed', e);
+        return null;
+    }
+}
 
-    const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
-        okButton: 'Delete',
-        cancelButton: 'Cancel',
-        defaultResult: RESULT_CANCEL,
-        customButtons: [{ text: 'Edit', result: CUSTOM_EDIT }],
-    });
+// 문단 단위(성공 시) 또는 메시지 통째(실패 시)로 편집창을 띄워 수정
+async function editByParagraph(mes, id, field, info, name) {
+    const { callGenericPopup, POPUP_TYPE } = ctx();
+    const map = await mapParagraph(id, field, info.para);
+    const val = getField(id, field);
+    const start = map ? map.start : 0;
+    const end = map ? map.end : val.length;
+    const seed = val.slice(start, end);
 
-    let action = null;
-    if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
-    else if (result === CUSTOM_EDIT) action = 'edit';
-    if (!action) return;
+    const fieldLabel = field === 'display_text' ? 'translation' : 'original';
+    const scope = map ? `${fieldLabel} paragraph ${map.index + 1} / ${map.count}` : `whole ${fieldLabel} message`;
+    // 번역문이 있는 상태에서 원문을 고칠 때는 "화면에서 고른 문단"을 같이 보여줘서 짝이 맞는지 눈으로 확인하게 함
+    const peek = (map && field === 'mes' && info.para?.text)
+        ? `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">Matched by position to the displayed paragraph:<br>“${escapeHtml(info.para.text.length > 160 ? info.para.text.slice(0, 160) + '…' : info.para.text)}”<br><i>Check that the text below really is its source.</i></div>`
+        : '';
+    const note = map ? '' : `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">Couldn't match this to a single paragraph, so the whole message is shown.</div>`;
 
+    const edited = await callGenericPopup(
+        `<h3>Edit ${fieldLabel}</h3>
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${peek}${note}`,
+        POPUP_TYPE.INPUT,
+        seed,
+        { rows: map ? 8 : 16, okButton: 'Save', cancelButton: 'Cancel' },
+    );
+    if (typeof edited !== 'string' || edited === seed) return;
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
-    // 원문에 해당 글자가 없으면(매크로/정규식 등으로 화면과 원문이 다른 경우) 알림
-    const raw0 = String(chat[id].mes ?? '');
-    if (!raw0.includes(text)) {
-        window.toastr?.warning('Could not locate the selected text in the message source.');
+    // 편집창이 떠 있는 동안 내용이 바뀌었으면 중단
+    const cur = getField(id, field);
+    if (cur.slice(start, end) !== seed) {
+        window.toastr?.warning('The message changed; nothing was replaced.');
         return;
     }
+    await setField(id, field, cur.slice(0, start) + edited + cur.slice(end));
+}
+
+// 화면 글자가 저장 텍스트에 그대로 있을 때: 정확한 위치를 바꾸거나 지움 (기존 방식)
+async function editExact(mes, id, field, action, info, name, sourceLabel) {
+    const { callGenericPopup, POPUP_TYPE } = ctx();
+    const { text, occurrence } = info;
 
     if (action === 'delete') {
-        await replaceSelection(id, text, occurrence, '');
+        await replaceSelection(id, field, text, occurrence, '');
         return;
     }
 
     // ----- Edit selection: 바꿀 글자를 입력. 같은 글자가 여러 개면 "모두 바꾸기" 체크박스 표시 -----
-    const total = countOccurrences(raw0, text);
+    const total = countOccurrences(getField(id, field), text);
     let replaceAll = false;
     const checkbox = total > 1
         ? `<label class="checkbox_label" style="justify-content:center;margin-top:10px">
                <input type="checkbox" id="mf-replace-all">
-               <span>Replace all ${total} occurrences in this message</span>
+               <span>Replace all ${total} occurrences in this ${sourceLabel}</span>
            </label>`
         : '';
 
     const edited = await callGenericPopup(
         `<h3>Edit selection</h3>
-         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}</div>
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}${field === 'display_text' ? ' · translation only' : ''}</div>
          ${checkbox}`,
         POPUP_TYPE.INPUT,
         text,
@@ -613,16 +726,87 @@ async function showSelectionMenu(mes, info) {
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
     if (replaceAll) {
-        const cur = String(chat[id]?.mes ?? '');
+        const cur = getField(id, field);
         if (!cur.includes(text)) {
             window.toastr?.warning('The message changed; nothing was replaced.');
             return;
         }
-        await setMessageText(id, cur.split(text).join(edited));
+        await setField(id, field, cur.split(text).join(edited));
         window.toastr?.success(`Replaced ${countOccurrences(cur, text)} occurrence(s).`);
     } else {
-        await replaceSelection(id, text, occurrence, edited);
+        await replaceSelection(id, field, text, occurrence, edited);
     }
+}
+
+// 선택 글자 메뉴
+//  1) 번역문(extra.display_text)이 없을 때
+//      - 선택한 글자가 원문에 그대로 있으면 → 기존 방식(정확한 위치 수정/삭제)
+//      - 없으면(마크다운·XML·정규식 등으로 화면이 달라진 경우) → <p> 문단 매칭으로 원문 문단 편집
+//  2) 번역문이 있을 때
+//      - Edit translation: 번역문(display_text)만 수정. mes(프롬프트)는 그대로. 글자가 안 맞으면 번역문 문단 편집
+//      - Edit original: 원문(mes)을 <p> 문단 단위로만 매칭해서 편집. 짝이 안 맞으면 원문 통째 편집
+async function showSelectionMenu(mes, info) {
+    const id = Number(mes.getAttribute('mesid'));
+    if (Number.isNaN(id) || !chat[id]) return;
+
+    const { text } = info;
+    const name = chat[id].name || '';
+    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+    const translated = hasDisplayText(id);
+
+    const html = `<h3>Selected text</h3>
+        <div style="text-align:left;opacity:.8;margin-top:8px">
+            <b>#${id}</b> ${escapeHtml(name)}${translated ? ' · <i>translated</i>' : ''}<br>“${escapeHtml(preview)}”
+        </div>`;
+
+    const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
+    if (!callGenericPopup || !POPUP_TYPE) return;
+
+    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM1 ?? 1001;
+    const CUSTOM_ORIG = POPUP_RESULT?.CUSTOM2 ?? 1002;
+    const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
+
+    const customButtons = translated
+        ? [{ text: 'Edit translation', result: CUSTOM_EDIT }, { text: 'Edit original', result: CUSTOM_ORIG }]
+        : [{ text: 'Edit', result: CUSTOM_EDIT }];
+
+    const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
+        okButton: translated ? 'Delete (translation)' : 'Delete',
+        cancelButton: 'Cancel',
+        defaultResult: RESULT_CANCEL,
+        customButtons,
+    });
+
+    let action = null;
+    if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
+    else if (result === CUSTOM_EDIT) action = 'edit';
+    else if (translated && result === CUSTOM_ORIG) action = 'original';
+    if (!action) return;
+
+    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
+
+    // 번역문이 있으면: Edit original 만 원문(mes), 나머지(Edit/Delete)는 번역문(display_text)이 대상
+    const field = (translated && action !== 'original') ? 'display_text' : 'mes';
+    const sourceLabel = field === 'display_text' ? 'translation' : 'message';
+
+    // 번역문이 있을 때 원문 수정 → 글자 매칭은 하지 않고 문단 단위로만
+    if (translated && action === 'original') {
+        await editByParagraph(mes, id, 'mes', info, name);
+        return;
+    }
+
+    // 화면 글자가 대상 텍스트에 그대로 있으면 기존 방식
+    if (getField(id, field).includes(text)) {
+        await editExact(mes, id, field, action, info, name, sourceLabel);
+        return;
+    }
+
+    // 그대로는 없음 (마크다운/XML/정규식 등으로 화면과 저장 텍스트가 다름) → 문단 매칭 폴백
+    if (action === 'delete') {
+        window.toastr?.warning('Could not locate the exact text. Use Edit to change the whole paragraph instead.');
+        return;
+    }
+    await editByParagraph(mes, id, field, info, name);
 }
 
 // (x, y) 지점에 실제 글자가 있는지 판정 (본문 블록의 빈 공간은 false)
