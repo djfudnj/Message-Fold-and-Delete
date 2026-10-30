@@ -491,15 +491,24 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    // 선택이 <p> 한 개 안에 있으면 그 문단의 위치 정보 (문단 매칭 폴백용). 여러 문단에 걸치면 null
+    // 선택이 걸친 <p> 들의 범위 (여러 문단에 걸쳐도 됨). 경계에 닿기만 하고 글자가 안 걸린 문단은 제외
     const ps = paraList(a);
-    const sp = elOf(range.startContainer)?.closest('p');
-    const ep = elOf(range.endContainer)?.closest('p');
-    let para = null;
-    if (sp && sp === ep) {
-        const i = ps.indexOf(sp);
-        if (i >= 0) para = { index: i, count: ps.length, text: sp.textContent.trim() };
-    }
+    const hasText = (p) => {
+        const r = document.createRange();
+        r.selectNodeContents(p);
+        if (p.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
+        if (p.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
+        return r.toString().trim() !== '';
+    };
+    const hit = ps.map((p, i) => ({ p, i })).filter(({ p }) => range.intersectsNode(p) && hasText(p));
+    const para = hit.length
+        ? {
+            index: hit[0].i,
+            last: hit[hit.length - 1].i,
+            count: ps.length,
+            text: hit.map((h) => h.p.textContent.trim()).join('\n\n'),
+        }
+        : null;
 
     return { mes, text, occurrence, para };
 }
@@ -639,11 +648,14 @@ async function mapParagraph(id, field, para) {
         let acc = 0;
         for (const b of blocks) { b.from = acc; acc += countP(b.text); b.to = acc; }
         // 검증 1: 블록별로 센 합계 == 통째로 센 개수 (리스트/인용문/정규식 때문에 쪼개면 달라지는 경우 걸러냄)
-        if (acc !== countP(val)) return null;
+        if (acc !== countP(val)) { console.debug('[message-fold] block sum != whole', acc, countP(val)); return null; }
         // 검증 2: 화면(DOM)의 문단 수와 같아야 함 (원문 ↔ 번역문 짝이 안 맞거나 정규식이 <p>를 만든 경우 걸러냄)
-        if (acc !== para.count) return null;
-        const hit = blocks.find((b) => para.index >= b.from && para.index < b.to);
-        return hit ? { start: hit.start, end: hit.end, text: hit.text, index: para.index, count: acc } : null;
+        if (acc !== para.count) { console.debug('[message-fold] p count mismatch', acc, para.count); return null; }
+        const last = para.last ?? para.index;
+        const b0 = blocks.find((b) => para.index >= b.from && para.index < b.to);
+        const b1 = blocks.find((b) => last >= b.from && last < b.to);
+        if (!b0 || !b1) return null;
+        return { start: b0.start, end: b1.end, text: val.slice(b0.start, b1.end), index: para.index, last, count: acc };
     } catch (e) {
         console.warn('[message-fold] paragraph mapping failed', e);
         return null;
@@ -660,7 +672,8 @@ async function editByParagraph(mes, id, field, info, name) {
     const seed = val.slice(start, end);
 
     const fieldLabel = field === 'display_text' ? 'translation' : 'original';
-    const scope = map ? `${fieldLabel} paragraph ${map.index + 1} / ${map.count}` : `whole ${fieldLabel} message`;
+    const rangeLabel = map && map.last > map.index ? `${map.index + 1}–${map.last + 1}` : map ? `${map.index + 1}` : '';
+    const scope = map ? `${fieldLabel} paragraph ${rangeLabel} / ${map.count}` : `whole ${fieldLabel} message`;
     // 번역문이 있는 상태에서 원문을 고칠 때는 "화면에서 고른 문단"을 같이 보여줘서 짝이 맞는지 눈으로 확인하게 함
     const peek = (map && field === 'mes' && info.para?.text)
         ? `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">Matched by position to the displayed paragraph:<br>“${escapeHtml(info.para.text.length > 160 ? info.para.text.slice(0, 160) + '…' : info.para.text)}”<br><i>Check that the text below really is its source.</i></div>`
@@ -672,7 +685,7 @@ async function editByParagraph(mes, id, field, info, name) {
          <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${peek}${note}`,
         POPUP_TYPE.INPUT,
         seed,
-        { rows: map ? 8 : 16, okButton: 'Save', cancelButton: 'Cancel' },
+        { rows: map ? Math.min(16, 6 + 3 * (map.last - map.index)) : 16, okButton: 'Save', cancelButton: 'Cancel' },
     );
     if (typeof edited !== 'string' || edited === seed) return;
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
