@@ -3,7 +3,7 @@
    - .mes_block 안에서는 .mf-placeholder 만 남기고 숨김 (이름, 본문, 버튼 등)
    - 테마가 .mes / .mes_block 에 입힌 장식(의사 요소, 배경, 테두리, 그림자, padding)을 제거
    - flex 축소 / content-visibility / 마이너스 margin 등으로 바가 겹치는 것을 방지
-   바의 세부 스타일은 테마 간섭을 피하려고 index.js 에서 인라인으로 지정합니다.
+   바의 모양(배경/테두리/글자 등)도 이 파일에서 지정합니다. (index.js 는 바 안의 내용만 만듦)
    최소 높이: Custom CSS 에 :root { --mf-min-height: 40px; }
    바 사이 간격: Custom CSS 에 :root { --mf-gap: 6px; }
    자동 접힘 미확인 바의 덧입힘 진하기(기본 20%): Custom CSS 에 :root { --mf-tint-alpha: 30%; }
@@ -69,9 +69,48 @@
     overflow: visible !important;
 }
 
-.mf-placeholder {
-    display: none;
+/* 접힌 바: 평소엔 숨김, .mf-folded 인 메시지에서만 보임
+   (펼침/접힘 전환은 클래스만 바뀌고 바는 그대로 재사용되므로 가볍다)
+   테마가 덮어쓰지 못하도록 #chat 기준의 높은 우선순위 + !important */
+#chat .mes .mf-placeholder {
+    display: none !important;
+}
+
+#chat .mes.mf-folded > .mes_block > .mf-placeholder {
+    display: flex !important;
     flex: 0 0 auto !important;
+    align-items: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-height: var(--mf-min-height, 34px) !important;
+    box-sizing: border-box !important;
+    padding: 6px 10px !important;
+    margin: 0 !important;
+    position: relative !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: hidden !important;
+    cursor: pointer !important;
+    color: var(--SmartThemeBodyColor, #ddd) !important;
+    background: var(--SmartThemeBlurTintColor, rgba(128, 128, 128, .18)) !important;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, .5)) !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+}
+
+/* 바 안의 구성요소: 아이콘 / 이름 / 미리보기(한 줄, 넘치면 …) */
+#chat .mes.mf-folded > .mes_block > .mf-placeholder > .mf-ph-icon,
+#chat .mes.mf-folded > .mes_block > .mf-placeholder > .mf-ph-name {
+    flex: 0 0 auto !important;
+}
+
+#chat .mes.mf-folded > .mes_block > .mf-placeholder > .mf-ph-text {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    opacity: 0.8 !important;
 }
 
 /* 자동 접힘 후 아직 안 눌러본 바: 인용문 색(--SmartThemeQuoteColor)을 20% 투명도로 덧씌움

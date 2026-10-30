@@ -138,59 +138,6 @@ let openId = null;
 
 const isFolded = (id) => !!chat[id]?.extra?.[KEY];
 
-// 테마가 덮어써도 바가 항상 보이도록 인라인 !important 로 지정
-function setImportant(el, styles) {
-    for (const [prop, val] of Object.entries(styles)) {
-        el.style.setProperty(prop, val, 'important');
-    }
-}
-
-function clearImportant(el, props) {
-    props.forEach((p) => el.style.removeProperty(p));
-}
-
-const FIX_PROPS = ['height', 'min-height', 'max-height', 'overflow'];
-
-function styleBar(ph, collapsed, block) {
-    if (!collapsed) {
-        setImportant(ph, { display: 'none' });
-        return;
-    }
-    // .mes_block 의 좌우 padding 만큼 바깥으로 확장해서 블록 전체 폭에 맞춤
-    let pl = 0;
-    let pr = 0;
-    if (block) {
-        const cs = getComputedStyle(block);
-        pl = parseFloat(cs.paddingLeft) || 0;
-        pr = parseFloat(cs.paddingRight) || 0;
-    }
-    // .mes_block 의 폭을 그대로 따라가며, 테마 색상 변수로 배경/테두리를 입힘
-    setImportant(ph, {
-        display: 'flex',
-        'align-items': 'center',
-        gap: '8px',
-        width: `calc(100% + ${pl + pr}px)`,
-        'min-height': 'var(--mf-min-height, 34px)',
-        'box-sizing': 'border-box',
-        padding: '6px 10px',
-        'margin-left': `${-pl}px`,
-        'margin-right': `${-pr}px`,
-        'margin-top': '0',
-        'margin-bottom': '0',
-        position: 'relative',
-        visibility: 'visible',
-        opacity: '1',
-        overflow: 'hidden',
-        cursor: 'pointer',
-        color: 'var(--SmartThemeBodyColor, #ddd)',
-        background: 'var(--SmartThemeBlurTintColor, rgba(128,128,128,.18))',
-        border: '1px solid var(--SmartThemeBorderColor, rgba(128,128,128,.5))',
-        'border-radius': '8px',
-        'font-size': '13px',
-        'line-height': '1.4',
-    });
-}
-
 function makePreview(id) {
     const msg = chat[id];
     const raw = String(msg?.mes ?? '')
@@ -202,6 +149,45 @@ function makePreview(id) {
     return { name: msg?.name ?? '', snippet };
 }
 
+// 접힌 바 안의 내용(아이콘 / 이름 / 미리보기)을 만든다.
+// 모양은 전부 style.css 가 정하므로 여기서는 DOM 만 만들고, 내용이 실제로 바뀐 경우에만 다시 만든다.
+// (펼침/접힘 전환 때는 .mf-folded 클래스만 바뀌고 바는 그대로 재사용됨)
+function ensureBar(ph, id) {
+    const msg = chat[id];
+    // 숨김(hide) 처리된 메시지(is_system, comment 포함)는 유령 아이콘, 숨김 해제된 comment 는 말풍선, 그 외는 ▶
+    const kind = msg?.is_system ? 'hidden' : (isComment(msg) ? 'comment' : 'normal');
+    const sig = ph._mfSig;
+    if (sig && sig.mes === msg?.mes && sig.name === msg?.name && sig.kind === kind) return;
+    ph._mfSig = { mes: msg?.mes, name: msg?.name, kind };
+
+    const { name, snippet } = makePreview(id);
+    let arrow;
+    if (kind === 'hidden') {
+        arrow = document.createElement('i');
+        arrow.className = 'fa-solid fa-ghost';
+        arrow.title = 'Hidden message';
+    } else if (kind === 'comment') {
+        arrow = document.createElement('i');
+        arrow.className = 'fa-solid fa-comment-dots';
+        arrow.title = 'Comment';
+    } else {
+        arrow = document.createElement('span');
+        arrow.textContent = '▶';
+    }
+    arrow.classList.add('mf-ph-icon');
+    const nm = document.createElement('b');
+    nm.className = 'mf-ph-name';
+    nm.textContent = name;
+    const tx = document.createElement('span');
+    tx.className = 'mf-ph-text';
+    tx.textContent = snippet ? `— ${snippet}` : '';
+    ph.replaceChildren(arrow, nm, tx);
+}
+
+// 값이 같으면 건드리지 않음 (불필요한 style 속성 갱신 방지)
+const setDisplay = (el, v) => { if (el.style.display !== v) el.style.display = v; };
+
+// 메시지 하나의 접힘 표시를 갱신. 클래스 토글이 전부라서 매우 가볍다.
 function render(mes) {
     const id = Number(mes.getAttribute('mesid'));
     const folded = isFolded(id);                 // 저장된 접힘 상태
@@ -220,52 +206,26 @@ function render(mes) {
         // 예전 버전(아이콘이 번갈아 바뀌던 단일 버튼)에서 남은 클래스 정리
         foldBtn.classList.remove(ICON_UNSET);
         foldBtn.classList.add(ICON_SET);
-        foldBtn.title = TITLE_SET;
-        foldBtn.style.display = (folded || replaceFold) ? 'none' : '';
+        if (foldBtn.title !== TITLE_SET) foldBtn.title = TITLE_SET;
+        setDisplay(foldBtn, (folded || replaceFold) ? 'none' : '');
     }
     const unfoldBtn = mes.querySelector('.mes_unfold');
     if (unfoldBtn) {
-        unfoldBtn.style.display = (folded && !replaceFold) ? '' : 'none';
+        setDisplay(unfoldBtn, (folded && !replaceFold) ? '' : 'none');
     }
 
-    // 높이만 풀어줌 (display/padding/폭은 테마 그대로 유지)
-    const block = mes.querySelector('.mes_block');
-    [mes, block].forEach((el) => {
-        if (!el) return;
-        if (collapsed) setImportant(el, { height: 'auto', 'min-height': '0', 'max-height': 'none', overflow: 'visible' });
-        else clearImportant(el, FIX_PROPS);
-    });
-
-    const ph = mes.querySelector('.mf-placeholder');
-    if (ph) {
-        if (collapsed) {
-            const { name, snippet } = makePreview(id);
-            ph.replaceChildren();
-            // 숨김(hide) 처리된 메시지(is_system, comment 포함)는 유령 아이콘, 숨김 해제된 comment 는 말풍선, 그 외는 ▶
-            let arrow;
-            if (chat[id]?.is_system) {
-                arrow = document.createElement('i');
-                arrow.className = 'fa-solid fa-ghost';
-                arrow.title = 'Hidden message';
-            } else if (isComment(chat[id])) {
-                arrow = document.createElement('i');
-                arrow.className = 'fa-solid fa-comment-dots';
-                arrow.title = 'Comment';
-            } else {
-                arrow = document.createElement('span');
-                arrow.textContent = '▶';
-            }
-            arrow.style.setProperty('flex', '0 0 auto');
-            const nm = document.createElement('b');
-            nm.textContent = name;
-            nm.style.setProperty('flex', '0 0 auto');
-            const tx = document.createElement('span');
-            tx.textContent = snippet ? `— ${snippet}` : '';
-            setImportant(tx, { 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', opacity: '0.8' });
-            ph.append(arrow, nm, tx);
-        }
-        styleBar(ph, collapsed, block);
+    // 접힌 메시지만 바 내용을 준비 (보이고 숨기는 건 CSS 가 .mf-folded 로 처리)
+    if (folded) {
+        const ph = mes.querySelector('.mf-placeholder');
+        if (ph) ensureBar(ph, id);
     }
+}
+
+// id 로 메시지를 찾아 그 메시지만 갱신
+function renderById(id) {
+    if (id === null || id === undefined) return;
+    const mes = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    if (mes) render(mes);
 }
 
 function decorate(mes) {
@@ -401,8 +361,10 @@ function openTemp(mes) {
 
     lastTap = { id: -1, time: 0 };   // 바를 연 클릭이 더블클릭의 첫 번째로 계산되지 않게
     if (openId === id) return;
+    const prev = openId;
     openId = id;
-    refreshAll();
+    renderById(prev);   // 이전에 펼쳐져 있던 메시지는 다시 접고
+    render(mes);        // 새로 누른 메시지만 펼침 (나머지 메시지는 건드리지 않음)
 }
 
 // 더블클릭/더블탭 감지용 (모바일은 dblclick 이 불안정해서 click 시각으로 직접 판정)
@@ -412,8 +374,9 @@ let lastTap = { id: -1, time: 0 };
 // 임시로 펼친 메시지를 다시 접음
 function closeTemp() {
     if (openId === null) return;
+    const prev = openId;
     openId = null;
-    refreshAll();
+    renderById(prev);
 }
 
 function onDocumentClick(e) {
