@@ -14,6 +14,7 @@
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
 //      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
+//        (선택 글자 메뉴는 터치 전용의 별도 누르는 시간 설정을 가짐, 최소 200ms. 마우스는 일반 마우스 시간을 사용)
 //      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
 //      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
 //      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
@@ -44,6 +45,9 @@ const DEFAULTS = {
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
+    holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
+    holdSaved: null,        // 터치랑 마우스 저장
+    holdSelSaved: null,     // 텍스트 선택 터치 저장
 };
 
 function settings() {
@@ -98,13 +102,15 @@ const TITLE_UNSET = 'Unfold message';
 const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 
 // ===== 길게 누르기 설정 =====
-// 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서 조절.
-// 터치로 이미 선택된 글자 위를 누를 때는 터치 시간의 80% 를 사용
+// 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
+// 선택한 글자 위 길게 누르기 시간은 터치에서만 settings().holdSelTouch 로 따로 조절 (마우스는 holdMouse 를 그대로 사용).
+// 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
 const HOLD_MIN = 500;
+const SEL_HOLD_MIN = 200;
 const HOLD_MAX = 1000;
-const holdTime = (v, fallback) => {
+const holdTime = (v, fallback, min = HOLD_MIN) => {
     const n = Number(v);
-    return Number.isFinite(n) ? Math.min(HOLD_MAX, Math.max(HOLD_MIN, n)) : fallback;
+    return Number.isFinite(n) ? Math.min(HOLD_MAX, Math.max(min, n)) : fallback;
 };
 const VISUAL_MS = 300;      // 팝업 직전 이 시간 동안 테두리가 서서히 진해짐
 const AFTER_POPUP_MS = 80; // 팝업이 뜬 뒤에도 테두리를 유지하는 시간
@@ -820,7 +826,14 @@ function initLongPress(chatEl) {
         mode = selHit ? 'sel' : 'msg';
         const st = settings();
         const touchMs = holdTime(st.holdTouch, 750);
-        holdMs = !isTouch ? holdTime(st.holdMouse, 610) : (selHit ? Math.round(touchMs * 0.8) : touchMs);
+        if (selHit) {
+            // 선택한 글자 위: 터치는 별도 설정(holdSelTouch), 마우스는 일반 마우스 시간(holdMouse)을 사용
+            holdMs = isTouch
+                ? holdTime(st.holdSelTouch, DEFAULTS.holdSelTouch, SEL_HOLD_MIN)
+                : holdTime(st.holdMouse, DEFAULTS.holdMouse);
+        } else {
+            holdMs = isTouch ? touchMs : holdTime(st.holdMouse, DEFAULTS.holdMouse);
+        }
 
         pressedMes = mes;
         startX = e.clientX;
@@ -976,7 +989,7 @@ function initSettingsPanel() {
                         <div class="mf-head">Target messages</div>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="none">
-                            <span><span class="mf-radio-title">None</span><small class="mf-desc">Don't auto-fold or auto-hide anything. The toggles below are turned off and locked.</small></span>
+                            <span><span class="mf-radio-title">None</span></span>
                         </label>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="comment">
@@ -988,7 +1001,7 @@ function initSettingsPanel() {
                         </label>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="every">
-                            <span><span class="mf-radio-title">All messages</span><small class="mf-desc">Every new message, including your own.</small></span>
+                            <span><span class="mf-radio-title">All messages</span></span>
                         </label>
                     </div>
                     <div class="mf-item mf-auto-toggle">
@@ -1007,9 +1020,10 @@ function initSettingsPanel() {
                     </div>
                     <small class="mf-desc mf-hint">Click to expand: auto-fold or hide new messages.</small>
                 </fieldset>
-                <fieldset class="mf-box">
+                <fieldset class="mf-box mf-compact">
                     <legend><i class="fa-solid fa-hand-pointer"></i>Delete &amp; Edit</legend>
                     <div class="mf-item">
+                    <div class="mf-head" style="margin-bottom: 6px;">Activate / Inactivate</div>
                         <label class="mf-opt" for="mf_long_press_menu">
                             <span class="mf-opt-title">Long-press message menu</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_long_press_menu"><span class="mf-slider"></span></span>
@@ -1026,7 +1040,10 @@ function initSettingsPanel() {
                     <div class="mf-item">
                         <div class="mf-head mf-head-row">
                             <span>Hold time</span>
-                            <button type="button" class="mf-reset" id="mf_hold_reset" title="Reset hold time to default" aria-label="Reset hold time to default"><i class="fa-solid fa-rotate-left"></i></button>
+                            <span class="mf-head-btns">
+                                <button type="button" class="mf-reset" id="mf_hold_save" title="Save current hold time" aria-label="Save current hold time"><i class="fa-solid fa-floppy-disk"></i></button>
+                                <button type="button" class="mf-reset" id="mf_hold_reset" title="Reset hold time to saved value (or default)" aria-label="Reset hold time to saved value (or default)"><i class="fa-solid fa-rotate-left"></i></button>
+                            </span>
                         </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
@@ -1038,7 +1055,22 @@ function initSettingsPanel() {
                             <input type="range" id="mf_hold_touch" min="500" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_touch_val"></span>
                         </label>
-                        <small class="mf-desc">How long to press before the popup appears. Longer values help avoid accidental popups.</small>
+                        <small class="mf-desc">How long to press before the message popup appears. Longer values help avoid accidental popups.</small>
+                    </div>
+                    <div class="mf-item">
+                        <div class="mf-head mf-head-row">
+                            <span>Text selection hold time</span>
+                            <span class="mf-head-btns">
+                                <button type="button" class="mf-reset" id="mf_hold_sel_save" title="Save current text selection hold time" aria-label="Save current text selection hold time"><i class="fa-solid fa-floppy-disk"></i></button>
+                                <button type="button" class="mf-reset" id="mf_hold_sel_reset" title="Reset text selection hold time to saved value (or default)" aria-label="Reset text selection hold time to saved value (or default)"><i class="fa-solid fa-rotate-left"></i></button>
+                            </span>
+                        </div>
+                        <label class="mf-range">
+                            <span class="mf-range-name">Touch</span>
+                            <input type="range" id="mf_hold_sel_touch" min="200" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_sel_touch_val"></span>
+                        </label>
+                        <small class="mf-desc">How long to press selected text on a touch screen before the Edit / Delete popup appears. If your device starts dragging the text first (e.g. Android), lower this. With a mouse, the Hold time above is used.</small>
                     </div>
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
@@ -1088,11 +1120,11 @@ function initSettingsPanel() {
     bind('mf_selection_menu', 'selectionMenu');
 
     // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
-    const bindRange = (id, key, fallback) => {
+    const bindRange = (id, key, fallback, min = HOLD_MIN) => {
         const el = wrap.querySelector(`#${id}`);
         const val = wrap.querySelector(`#${id}_val`);
         const show = () => { val.textContent = `${el.value} ms`; };
-        el.value = holdTime(settings()[key], fallback);
+        el.value = holdTime(settings()[key], fallback, min);
         show();
         const save = () => {
             settings()[key] = Number(el.value);
@@ -1108,15 +1140,34 @@ function initSettingsPanel() {
         { ...bindRange('mf_hold_touch', 'holdTouch', DEFAULTS.holdTouch), key: 'holdTouch' },
     ];
 
-    // 길게 누르기 시간 기본값으로 되돌리기
-    wrap.querySelector('#mf_hold_reset').addEventListener('click', () => {
-        for (const { el, show, key } of holdSliders) {
-            el.value = DEFAULTS[key];
-            settings()[key] = DEFAULTS[key];
-            show();
-        }
-        ctx().saveSettingsDebounced();
-    });
+    const holdSelSliders = [
+        { ...bindRange('mf_hold_sel_touch', 'holdSelTouch', DEFAULTS.holdSelTouch, SEL_HOLD_MIN), key: 'holdSelTouch' },
+    ];
+
+    // 길게 누르기 시간 저장 / 초기화 (메시지용 / 선택 글자용 각각)
+    //  - 저장 버튼: 현재 슬라이더 값(마우스/터치)을 savedKey 에 보관
+    //  - 초기화 버튼: 저장해 둔 값이 있으면 그 값으로, 없으면 기본값으로 되돌림
+    const bindHoldButtons = (saveId, resetId, sliders, savedKey, label, min) => {
+        wrap.querySelector(`#${saveId}`).addEventListener('click', () => {
+            const st = settings();
+            st[savedKey] = {};
+            for (const { el, key } of sliders) st[savedKey][key] = Number(el.value);
+            ctx().saveSettingsDebounced();
+            window.toastr?.success(`${label} saved.`);
+        });
+        wrap.querySelector(`#${resetId}`).addEventListener('click', () => {
+            const st = settings();
+            for (const { el, show, key } of sliders) {
+                const v = holdTime(st[savedKey]?.[key], DEFAULTS[key], min);
+                el.value = v;
+                st[key] = v;
+                show();
+            }
+            ctx().saveSettingsDebounced();
+        });
+    };
+    bindHoldButtons('mf_hold_save', 'mf_hold_reset', holdSliders, 'holdSaved', 'Hold time', HOLD_MIN);
+    bindHoldButtons('mf_hold_sel_save', 'mf_hold_sel_reset', holdSelSliders, 'holdSelSaved', 'Text selection hold time', SEL_HOLD_MIN);
 
     // 접이식 박스 (옵시디언 콜아웃처럼 기본은 접힘): 제목 또는 안내 문구를 누르면 펼침/접힘
     for (const box of wrap.querySelectorAll('.mf-collapsible')) {
@@ -1231,6 +1282,7 @@ jQuery(() => {
 
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
     // 자동 접기/숨기기 기준선: 채팅을 열 때 기존 메시지 수로 갱신, 삭제로 줄어들면 같이 낮춤
+    // 클로드가 달아준 주석들 왠지 지우면 안 될 것 같군 ㅋㅋ 너도 내 주석 지우지 마 클로드야 
     syncBaseline();
     if (event_types.CHAT_CHANGED) eventSource.on(event_types.CHAT_CHANGED, syncBaseline);
     if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, () => { autoBaseline = Math.min(autoBaseline, chat.length); });

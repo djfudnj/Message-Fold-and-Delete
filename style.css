@@ -280,6 +280,14 @@
     gap: calc(var(--mf-sp) * 3);
 }
 
+/* 저장 / 초기화 버튼을 나란히 */
+.mf-head-btns {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--mf-sp) * 1);
+    flex: 0 0 auto;
+}
+
 .mf-reset {
     flex: 0 0 auto;
     margin: 0;
@@ -436,4 +444,10 @@
 .mf-radio input {
     margin: 3px 0 0;
     flex: 0 0 auto;
+}
+
+/* Delete & Edit 박스: 토글 제목을 아래 Mouse / Touch 라벨과 같은 크기·굵기로 */
+.mf-compact .mf-opt-title {
+    font-size: 1em;
+    font-weight: normal;
 }
