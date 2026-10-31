@@ -1,34 +1,4 @@
-// Message Fold (Persistent) + Long Press Menu
-// 메시지 객체의 extra.folded 값(true/없음)으로 접힘 상태를 저장합니다.
-// is_system 처럼 chat.jsonl 에 함께 저장되므로 기기/브라우저가 달라도 유지됩니다.
-//
-// 동작:
-//  - 접힌(저장된) 메시지의 바를 누르면 "임시로" 펼쳐집니다. (저장 상태는 변하지 않음)
-//  - 펼쳐진 메시지 안을 누르면 그대로 유지, 다른 메시지/빈 곳을 누르면 다시 접힙니다.
-//  - 저장된 접힘 상태는 메시지 액션의 아이콘(접기 설정 ↔ 접기 해제)으로 바뀝니다.
-//  - 메시지(접힌 바 포함)를 길게 누르면 팝업이 뜨고 Hide(Unhide) / Delete / Fold(Unfold) / Cancel 을 고를 수 있습니다.
-//  - 글자를 드래그로 선택한 뒤, 손을 떼고 선택된 글자 위를 다시 길게 누르면
-//    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
-//  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
-//  - 선택한 글자가 저장된 텍스트에 그대로 없으면(마크다운/XML/정규식 등으로 화면이 달라진 경우)
-//    SillyTavern 본체의 messageFormatting 으로 <p> 문단을 맞춰서 해당 문단을 통째로 편집합니다. (실패하면 메시지 통째 편집)
-//  - 번역문(extra.display_text)이 있는 메시지는 Edit translation(번역문만 수정, 원문 mes 는 안 바뀜) /
-//    Edit original(원문을 <p> 문단 단위로만 매칭해서 수정) 중에 고를 수 있습니다.
-//  - LLM 번역 확장 번역문이 감지되면(원문과 번갈아 보이든 번역문만 보이든) 안내 토스트를 띄우고 번역문(display_text)만 수정합니다.
-//    번역 확장의 IndexedDB(LLMtranslatorDB) 번역문을 직접 고친 뒤 /LlmTranslateID 로 화면용 display_text 를 다시 만들게 합니다(LLM 호출 없음).
-//    DB 에서 못 찾으면 display_text 안의 번역 span 만 고치는 방식으로 폴백합니다. 원문(mes)은 건드리지 않습니다.
-//    (변경) LLM 번역이 떠 있을 때 Edit 를 고르면 오류 토스트를 띄우고, LLM 번역 확장 자체의 "번역문 수정" 버튼(.mes_edit_translation)을 눌러
-//    그 확장의 수정창으로 넘깁니다. Delete 는 위의 방식 그대로 동작합니다.
-//  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
-//  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
-//  - 확장 패널 옵션
-//      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
-//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 터치 최소 200ms / 마우스 최소 10ms)
-//      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
-//      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
-//      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
-//      · Hide & Fold 연동: hide 하면 자동 fold, unhide 하면 자동 unfold (팝업 버튼도 하나로 합쳐짐)
-//      · 슬래시 명령어로 만든 메시지(/sendas, /comment 등, extra.model='slash command') 자동 접기 (아직 안 눌렀으면 인용문 색을 20% 덧입힘)
+// 걍 개인 저장용
 
 import { chat, eventSource, event_types, saveChatConditional, updateMessageBlock } from '../../../../script.js';
 
