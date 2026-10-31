@@ -1,4 +1,29 @@
-// 걍 개인 저장용
+// Message Fold (Persistent) + Long Press Menu
+// 메시지 객체의 extra.folded 값(true/없음)으로 접힘 상태를 저장합니다.
+// is_system 처럼 chat.jsonl 에 함께 저장되므로 기기/브라우저가 달라도 유지됩니다.
+//
+// 동작:
+//  - 접힌(저장된) 메시지의 바를 누르면 "임시로" 펼쳐집니다. (저장 상태는 변하지 않음)
+//  - 펼쳐진 메시지 안을 누르면 그대로 유지, 다른 메시지/빈 곳을 누르면 다시 접힙니다.
+//  - 저장된 접힘 상태는 메시지 액션의 아이콘(접기 설정 ↔ 접기 해제)으로 바뀝니다.
+//  - 메시지(접힌 바 포함)를 길게 누르면 팝업이 뜨고 Hide(Unhide) / Delete / Fold(Unfold) / Cancel 을 고를 수 있습니다.
+//  - 글자를 드래그로 선택한 뒤, 손을 떼고 선택된 글자 위를 다시 길게 누르면
+//    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
+//  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
+//  - 선택한 글자가 저장된 텍스트에 그대로 없으면(마크다운/XML/정규식 등으로 화면이 달라진 경우)
+//    SillyTavern 본체의 messageFormatting 으로 <p> 문단을 맞춰서 해당 문단을 통째로 편집합니다. (실패하면 메시지 통째 편집)
+//  - 번역문(extra.display_text)이 있는 메시지는 Edit translation(번역문만 수정, 원문 mes 는 안 바뀜) /
+//    Edit original(원문을 <p> 문단 단위로만 매칭해서 수정) 중에 고를 수 있습니다.
+//  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
+//  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
+//  - 확장 패널 옵션
+//      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
+//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 터치 최소 200ms / 마우스 최소 10ms)
+//      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
+//      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
+//      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
+//      · Hide & Fold 연동: hide 하면 자동 fold, unhide 하면 자동 unfold (팝업 버튼도 하나로 합쳐짐)
+//      · 슬래시 명령어로 만든 메시지(/sendas, /comment 등, extra.model='slash command') 자동 접기 (아직 안 눌렀으면 인용문 색을 20% 덧입힘)
 
 import { chat, eventSource, event_types, saveChatConditional, updateMessageBlock } from '../../../../script.js';
 
@@ -494,80 +519,10 @@ function getSelectionInfo() {
         }
         : null;
 
-    // LLM 번역 확장 "원문<>번역문 함께 보기" 모드: 선택이 걸친 줄(span)들의 "번역 쪽" span 목록.
-    // 원문 span 을 골랐으면 그 짝(같은 details 안, 또는 바로 옆 span)의 번역 span 으로 바꿔 둔다.
-    let trans = null;
-    const SPAN_SEL = '.translated_text, .original_text';
-    const allSpans = [...a.querySelectorAll(SPAN_SEL)];
-    if (allSpans.length) {
-        const partnerOf = (sp) => {
-            const isT = sp.classList.contains('translated_text');
-            const want = isT ? '.original_text' : '.translated_text';
-            const d = sp.closest('details');
-            if (d) return d.querySelector(want);
-            for (const dir of ['nextElementSibling', 'previousElementSibling']) {
-                let n = sp[dir];
-                if (n && n.tagName === 'BR') n = n[dir];
-                if (n?.matches?.(want)) return n;
-            }
-            return null;
-        };
-        const allT = [...a.querySelectorAll('.translated_text')];
-        const picked = [];
-        for (const sp of allSpans) {
-            if (!(range.intersectsNode(sp) && hasText(sp))) continue;
-            const t = sp.classList.contains('translated_text') ? sp : partnerOf(sp);
-            if (t && !picked.includes(t)) picked.push(t);
-        }
-        if (picked.length) {
-            // 선택 범위 안에서 "그 번역 span 에 속한 부분"만 잘라낸 글자.
-            // range.toString() 은 접힌 <details> 안의 숨은 원문까지 전부 이어 붙이므로, 번역 줄 글자만 따로 모은다.
-            const clipText = (el) => {
-                const r = document.createRange();
-                r.selectNodeContents(el);
-                if (el.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
-                if (el.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
-                return r.toString();
-            };
-            const tg = picked
-                .map((t) => ({ index: allT.indexOf(t), text: t.textContent, sel: clipText(t) }))
-                .filter((x) => x.index >= 0);
-            trans = {
-                count: allT.length,
-                targets: tg,
-                selText: tg.map((x) => (x.sel.trim() || x.text.trim())).join('\n'),
-            };
-        }
-    }
+    // 안내문에 인용할 선택 글자 (줄 단위)
+    const lines = sel.toString().split(/\n+/).map((t) => t.trim()).filter(Boolean);
 
-    // 선택이 번역 span 한 개 안에 있으면, 그 줄 안에서 같은 글자가 앞에 몇 번 나왔는지 (번역 줄 안 정확한 위치 찾기용)
-    if (trans && trans.targets.length === 1) {
-        const sT = elOf(range.startContainer)?.closest('.translated_text');
-        const eT = elOf(range.endContainer)?.closest('.translated_text');
-        const tsel = trans.selText;
-        if (sT && sT === eT && tsel) {
-            const pre = document.createRange();
-            pre.selectNodeContents(sT);
-            pre.setEnd(range.startContainer, range.startOffset);
-            const D = sT.textContent;
-            const q = D.indexOf(tsel, pre.toString().length);
-            if (q >= 0) {
-                let occ = 0;
-                for (let i = D.indexOf(tsel); i !== -1 && i < q; i = D.indexOf(tsel, i + 1)) occ++;
-                trans.occ = occ;
-                // 번역 줄 전체(문서 순서)에서 앞에 몇 번 나왔는지 → DB 번역문에서 같은 위치를 찾는 용도
-                let before = 0;
-                for (const t of a.querySelectorAll('.translated_text')) {
-                    if (t === sT) break;
-                    const tt = t.textContent;
-                    for (let i = tt.indexOf(tsel); i !== -1; i = tt.indexOf(tsel, i + 1)) before++;
-                }
-                trans.occAll = before + occ;
-            }
-        }
-    }
-
-    return { mes, text, occurrence, occurrenceC, para, trans };
+    return { mes, text, occurrence, occurrenceC, para, lines: lines.length ? lines : [text] };
 }
 
 // (x, y) 가 현재 선택 영역 위인지
@@ -626,21 +581,13 @@ function writeDisplayText(msg, next) {
 }
 
 // 메시지 본문(mes)을 통째로 교체하고 저장 (SillyTavern 기본 편집 저장과 같은 순서)
-//  opts.display: 같이 바꿀 display_text (함께 보기 모드에서 원문 줄을 고칠 때 화면의 원문 줄도 맞추려고 사용)
-async function setMessageText(id, next, opts = {}) {
+async function setMessageText(id, next) {
     const msg = chat[id];
     if (!msg) return;
     msg.mes = next;
     if (Array.isArray(msg.swipes) && Number.isInteger(msg.swipe_id) && msg.swipes[msg.swipe_id] !== undefined) {
         msg.swipes[msg.swipe_id] = next;
     }
-    // LLM 번역 확장은 MESSAGE_UPDATED 때 "저장된 기준 원문 != 현재 mes" 이면 번역을 지우고 재번역함.
-    // 우리가 고친 원문을 기준 원문으로 같이 갱신해서, 원문을 고쳐도 번역이 날아가지 않게 함
-    if (msg.extra?.original_text_for_translation !== undefined) {
-        const c = ctx();
-        msg.extra.original_text_for_translation = c.substituteParams ? c.substituteParams(next, c.name1, msg.name) : next;
-    }
-    if (opts.display !== undefined) writeDisplayText(msg, opts.display);
     updateMessageBlock(id, msg);
     await eventSource.emit(event_types.MESSAGE_EDITED, id);
     await eventSource.emit(event_types.MESSAGE_UPDATED, id);
@@ -764,15 +711,17 @@ async function editByParagraph(mes, id, field, info, name) {
     const fieldLabel = field === 'display_text' ? 'translation' : 'original';
     const rangeLabel = map && map.last > map.index ? `${map.index + 1}–${map.last + 1}` : map ? `${map.index + 1}` : '';
     const scope = map ? `${fieldLabel} paragraph ${rangeLabel} / ${map.count}` : `whole ${fieldLabel} message`;
-    // 번역문이 있는 상태에서 원문을 고칠 때는 "화면에서 고른 문단"을 같이 보여줘서 짝이 맞는지 눈으로 확인하게 함
-    const peek = (map && field === 'mes' && info.para?.text)
-        ? `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">Matched by position to the displayed paragraph:<br>“${escapeHtml(info.para.text.length > 160 ? info.para.text.slice(0, 160) + '…' : info.para.text)}”<br><i>Check that the text below really is its source.</i></div>`
-        : '';
-    const note = map ? '' : `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">Couldn't match this to a single paragraph, so the whole message is shown.</div>`;
+    // 내가 선택했던 글자를 인용: 3줄을 넘으면 앞 2줄만 보여주고 뒤는 …
+    const clip = (t) => (t.length > 120 ? t.slice(0, 120) + '…' : t);
+    const ql = (info.lines?.length ? info.lines : [info.text]).map(clip);
+    const quote = (ql.length > 3 ? [...ql.slice(0, 2), '…'] : ql).map(escapeHtml).join('<br>');
+    const notice = `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">`
+        + `Couldn't match your selection exactly, so the whole ${map ? 'paragraph' + (map.last > map.index ? 's' : '') : 'message'} is shown below.`
+        + `<br><br>Your selection:<br>“${quote}”</div>`;
 
     const edited = await callGenericPopup(
         `<h3>Edit ${fieldLabel}</h3>
-         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${peek}${note}`,
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${notice}`,
         POPUP_TYPE.INPUT,
         seed,
         { rows: map ? Math.min(16, 6 + 3 * (map.last - map.index)) : 16, okButton: 'Save', cancelButton: 'Cancel' },
@@ -841,520 +790,6 @@ async function editExact(mes, id, field, action, info, name, sourceLabel) {
     }
 }
 
-// ===================== LLM 번역 확장 감지 + 번역문만 수정 =====================
-// LLM 번역이 떠 있으면 원문(mes)은 절대 건드리지 않고 번역문(display_text)만 수정한다.
-// "원문<>번역문 함께 보기" 모드의 display_text 는
-//   <details class="llm-translator-details"><summary><span class="translated_text">번역</span></summary><span class="original_text">원문</span></details>
-// 같은 HTML 이지만, 편집창에는 번역 줄의 "내용"만 보여주고 저장할 때 그 span 안쪽만 바꿔 끼운다. (껍데기 태그는 안 보임)
-
-// display_text 문자열에서 translated_text / original_text span 을 순서대로 뽑음 (중첩 span 도 짝 맞춰서 처리)
-function parseDualSpans(html) {
-    const spans = [];
-    const openRe = /<span class="(translated_text|original_text)(?:\s[^"]*)?">/g;
-    let m;
-    while ((m = openRe.exec(html))) {
-        const innerStart = m.index + m[0].length;
-        const tagRe = /<(\/?)span\b[^>]*>/gi;
-        tagRe.lastIndex = innerStart;
-        let depth = 1, t;
-        while ((t = tagRe.exec(html))) {
-            depth += t[1] ? -1 : 1;
-            if (!depth) break;
-        }
-        if (depth) continue;
-        spans.push({
-            kind: m[1] === 'translated_text' ? 'translated' : 'original',
-            start: innerStart,
-            end: t.index,
-            text: html.slice(innerStart, t.index),
-        });
-        openRe.lastIndex = t.index + t[0].length;
-    }
-    return spans;
-}
-
-// 이 메시지의 display_text 가 LLM 번역 확장이 만든 것인지
-function isLlmTranslated(id) {
-    const msg = chat[id];
-    const dt = msg?.extra?.display_text;
-    if (!dt) return false;
-    return msg.extra.original_text_for_translation !== undefined
-        || /class="(?:llm-translator|translated_text|original_text)/.test(dt);
-}
-
-const stripTags = (s) => new DOMParser().parseFromString(String(s), 'text/html').body.textContent;
-const normText = (s) => stripTags(s).replace(/\s+/g, ' ').trim();
-const SPAN_DIVIDER = '\n\n──────────\n\n';
-
-// 화면에서 고른 번역 span(info.trans) 들을 display_text 의 번역 span 들에 대응시킴.
-// 개수가 같으면 순서로, 다르면 글자 비교로. 둘 다 실패하면 null
-function mapTranslatedSpans(pt, trans) {
-    if (!trans || !trans.targets.length) return null;
-    if (pt.length === trans.count) return trans.targets.map((t) => pt[t.index]).filter(Boolean);
-    const out = [];
-    let from = 0;
-    for (const t of trans.targets) {
-        const want = normText(t.text);
-        const j = pt.findIndex((p, i) => i >= from && normText(p.text) === want);
-        if (j < 0) return null;
-        out.push(pt[j]);
-        from = j + 1;
-    }
-    return out;
-}
-
-// ---------- 번역 span 소스(마크다운/HTML 태그가 섞여 있을 수 있음)에서 "화면에 보이는 글자"만 다루는 도구 ----------
-const VIS_ENT = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' };
-
-// mode 0: 소스 그대로 / 1: 태그, 엔티티, 마크다운 기호(* ~ ` \)를 건너뜀 / 2: _ 까지 건너뜀
-// plain: 화면에 보이는 글자열, ranges[i]: plain[i] 가 소스에서 차지하는 [시작, 끝)
-function visibleModel(src, mode) {
-    const chars = [];
-    const ranges = [];
-    for (let i = 0; i < src.length;) {
-        const c = src[i];
-        if (mode > 0) {
-            if (c === '<' && /^<\/?[a-zA-Z!]/.test(src.slice(i, i + 3))) {
-                const e = src.indexOf('>', i);
-                if (e > 0) { i = e + 1; continue; }
-            }
-            if (c === '&') {
-                const ent = Object.keys(VIS_ENT).find((k) => src.startsWith(k, i));
-                if (ent) { chars.push(VIS_ENT[ent]); ranges.push([i, i + ent.length]); i += ent.length; continue; }
-            }
-            if (c === '*' || c === '~' || c === '`' || (mode > 1 && c === '_')) { i++; continue; }
-            if (c === '\\' && i + 1 < src.length && /[\\`*_{}\[\]()#+\-.!~<>|]/.test(src[i + 1])) {
-                chars.push(src[i + 1]); ranges.push([i, i + 2]); i += 2; continue;
-            }
-        }
-        chars.push(c === '\u00a0' ? ' ' : c);
-        ranges.push([i, i + 1]);
-        i++;
-    }
-    return { plain: chars.join(''), ranges };
-}
-
-// 지정한 범위들만 소스에서 빼고(= 사이에 낀 태그/기호는 그대로 둠) 첫 범위 자리에 replacement 를 넣음
-function removeRanges(src, ranges, replacement = '') {
-    let out = '';
-    let last = 0;
-    let inserted = false;
-    for (const [s, e] of ranges) {
-        out += src.slice(last, s);
-        if (!inserted) { out += replacement; inserted = true; }
-        last = e;
-    }
-    return out + src.slice(last);
-}
-
-// 글자를 지운 뒤 비어 버린 서식(<i></i>, *…* 의 빈 껍데기 **, ****, ~~~~)을 정리
-function tidyEmptyMarkup(src, doTidy) {
-    if (!doTidy) return src;
-    let cur = src;
-    for (let n = 0; n < 5; n++) {
-        const next = cur.replace(/<([a-zA-Z][\w-]*)\b[^>]*>\s*<\/\1>/g, '').replace(/(?<!\*)(?:\*{4}|\*{6})(?!\*)|~{4}/g, '');
-        if (next === cur) break;
-        cur = next;
-    }
-    return cur;
-}
-
-// 화면에서 고른 글자(sel)를 소스에서 찾음. occ: 앞에서부터 몇 번째인지 (숫자) 또는 'last'
-// 반환: { shown(태그 없는 선택 글자), apply(replacement) → 바뀐 소스 } 또는 null
-function locateVisible(src, sel, occ) {
-    sel = String(sel).replace(/\u00a0/g, ' ');
-    if (!sel.trim()) return null;
-    const pick = (idx) => (occ === 'last' ? idx[idx.length - 1] : (idx[occ] ?? idx[0]));
-    // [서식 건너뛰기 단계, 공백/줄바꿈 무시 여부]
-    for (const [mode, ws] of [[0, false], [1, false], [2, false], [1, true], [2, true]]) {
-        const { plain, ranges } = visibleModel(src, mode);
-        if (!ws) {
-            const idx = [];
-            for (let i = plain.indexOf(sel); i !== -1; i = plain.indexOf(sel, i + 1)) idx.push(i);
-            if (!idx.length) continue;
-            const at = pick(idx);
-            const sub = ranges.slice(at, at + sel.length);
-            return { shown: plain.slice(at, at + sel.length), apply: (rep) => tidyEmptyMarkup(removeRanges(src, sub, rep), rep === '') };
-        }
-        // 연속된 공백/줄바꿈을 공백 하나로 보고 비교 (여러 줄에 걸친 선택용)
-        const cp = [];
-        const cmap = [];
-        let prevWs = false;
-        for (let i = 0; i < plain.length; i++) {
-            const isWs = /\s/.test(plain[i]);
-            if (isWs && prevWs) continue;
-            cp.push(isWs ? ' ' : plain[i]);
-            cmap.push(i);
-            prevWs = isWs;
-        }
-        const cplain = cp.join('');
-        const selC = sel.replace(/\s+/g, ' ').trim();
-        const idx = [];
-        for (let i = cplain.indexOf(selC); i !== -1; i = cplain.indexOf(selC, i + 1)) idx.push(i);
-        if (!idx.length) continue;
-        const at = pick(idx);
-        const p0 = cmap[at];
-        const p1 = cmap[at + selC.length - 1];
-        const sub = ranges.slice(p0, p1 + 1);
-        return { shown: plain.slice(p0, p1 + 1), apply: (rep) => tidyEmptyMarkup(removeRanges(src, sub, rep), rep === '') };
-    }
-    return null;
-}
-
-// ---------- ST 본체 변환(정규식 + 마크다운)을 거친 "화면 글자"로 위치 찾기 ----------
-// 소스 문자열을 messageFormatting 에 통과시켜 화면에 실제로 보이는 글자열(R)을 만들고,
-// 드래그한 글자를 R 에서 찾은 뒤, R 의 각 글자가 소스의 어느 글자에서 왔는지(글자 정렬)로 소스 위치를 되돌린다.
-// 마크다운/정규식 규칙을 우리가 재현하지 않으므로 ST 와 어긋나지 않는다.
-
-// 두 글자열을 정렬해서 b 의 각 글자가 a 의 몇 번째 글자에 대응하는지 돌려줌 (대응 없으면 -1). 너무 크면 null
-function alignChars(a, b) {
-    const n = a.length, m = b.length;
-    const map = new Int32Array(m).fill(-1);
-    let pre = 0;
-    while (pre < n && pre < m && a[pre] === b[pre]) { map[pre] = pre; pre++; }
-    let sa = n, sb = m;
-    while (sa > pre && sb > pre && a[sa - 1] === b[sb - 1]) { sa--; sb--; map[sb] = sa; }
-    const N = sa - pre, M = sb - pre;
-    if (N === 0 || M === 0) return map;
-    if (N * M > 6e6) return null;
-    const W = M + 1;
-    const dp = new Uint16Array((N + 1) * W);
-    for (let i = N - 1; i >= 0; i--) {
-        for (let j = M - 1; j >= 0; j--) {
-            dp[i * W + j] = a[pre + i] === b[pre + j]
-                ? dp[(i + 1) * W + j + 1] + 1
-                : Math.max(dp[(i + 1) * W + j], dp[i * W + j + 1]);
-        }
-    }
-    let i = 0, j = 0;
-    while (i < N && j < M) {
-        if (a[pre + i] === b[pre + j]) { map[pre + j] = pre + i; i++; j++; }
-        else if (dp[(i + 1) * W + j] >= dp[i * W + j + 1]) i++;
-        else j++;
-    }
-    return map;
-}
-
-// 변환된 HTML 에서 보이는 글자만 뽑음 (블록 사이/줄바꿈은 개행으로)
-function renderedPlain(html) {
-    const doc = new DOMParser().parseFromString(String(html), 'text/html');
-    doc.querySelectorAll('script,style').forEach((e) => e.remove());
-    doc.body.querySelectorAll('br').forEach((b) => b.replaceWith('\n'));
-    doc.body.querySelectorAll('p,li,h1,h2,h3,h4,h5,h6,div,blockquote,tr,pre').forEach((e) => e.append('\n'));
-    return doc.body.textContent.replace(/\u00a0/g, ' ');
-}
-
-// fmtText(블록 소스) → 변환된 "보이는 글자열". 반환: { shown, apply(rep) } 또는 null
-function locateRendered(src, sel, occ, fmtText) {
-    sel = String(sel).replace(/\u00a0/g, ' ');
-    const selC = sel.replace(/\s+/g, ' ').trim();
-    if (!selC) return null;
-
-    // 블록(빈 줄 기준)마다 변환하고 정렬해서 R 의 글자별 소스 위치를 모음
-    const Rch = [];
-    const Rpos = [];   // 글자가 소스에서 온 경우 [시작, 끝) (절대 위치), 아니면 null
-    for (const b of splitBlocks(src)) {
-        const { plain: P, ranges } = visibleModel(b.text, 1);
-        const Rb = fmtText(b.text);
-        const map = alignChars(P, Rb);
-        for (let j = 0; j < Rb.length; j++) {
-            Rch.push(Rb[j]);
-            const i = map ? map[j] : -1;
-            Rpos.push(i >= 0 ? [b.start + ranges[i][0], b.start + ranges[i][1]] : null);
-        }
-        Rch.push('\n');
-        Rpos.push(null);
-    }
-    if (!Rch.length) return null;
-
-    // 공백/줄바꿈 차이를 무시하고 선택 글자를 R 에서 찾음
-    const cp = [];
-    const cmap = [];
-    let prevWs = false;
-    for (let i = 0; i < Rch.length; i++) {
-        const isWs = /\s/.test(Rch[i]);
-        if (isWs && prevWs) continue;
-        cp.push(isWs ? ' ' : Rch[i]);
-        cmap.push(i);
-        prevWs = isWs;
-    }
-    const cplain = cp.join('');
-    const idx = [];
-    for (let i = cplain.indexOf(selC); i !== -1; i = cplain.indexOf(selC, i + 1)) idx.push(i);
-    if (!idx.length) return null;
-    const at = occ === 'last' ? idx[idx.length - 1] : (idx[occ] ?? idx[0]);
-    const p0 = cmap[at];
-    const p1 = cmap[at + selC.length - 1];
-
-    // 선택 구간 중 소스에서 온 글자만 대상으로 함 (정규식이 만든 글자는 건드리지 않음)
-    const sub = [];
-    let shown = '';
-    let nonWs = 0;
-    for (let k = p0; k <= p1; k++) {
-        if (!/\s/.test(Rch[k])) nonWs++;
-        if (Rpos[k]) { sub.push(Rpos[k]); shown += Rch[k]; }
-    }
-    const matchedNonWs = sub.filter((r) => !/\s/.test(src.slice(r[0], r[1]))).length;
-    if (!sub.length || matchedNonWs < nonWs * 0.6) return null;   // 대부분이 정규식이 만든 글자면 신뢰하지 않음
-    return { shown, apply: (rep) => tidyEmptyMarkup(removeRanges(src, sub, rep), rep === '') };
-}
-
-// 1순위: ST 본체 변환으로 찾기, 2순위: 간이 서식 제거로 찾기
-async function locateBest(src, sel, occ, id) {
-    try {
-        const fmt = await getFormatter();
-        const msg = chat[id];
-        if (fmt && msg) {
-            const fmtText = (t) => renderedPlain(fmt(t, msg.name, !!msg.is_system, !!msg.is_user, id));
-            const hit = locateRendered(src, sel, occ, fmtText);
-            if (hit) return hit;
-        }
-    } catch (e) {
-        console.warn('[message-fold] rendered locate failed', e);
-    }
-    return locateVisible(src, sel, occ);
-}
-
-// ---------- LLM 번역 확장의 IndexedDB(LLMtranslatorDB / translations)를 직접 읽고 씀 ----------
-// 번역 확장은 번역문을 "원문 텍스트"를 키로 여기에 저장하고, display_text 는 거기서 만들어 낸 값이다.
-// 그래서 DB 의 번역문을 고친 뒤 /LlmTranslateID 를 부르면(DB 에 번역이 있으면 LLM 호출 없이) display_text 가 다시 만들어진다.
-const LLM_DB_NAME = 'LLMtranslatorDB';
-const LLM_STORE_NAME = 'translations';
-
-function llmOpenDB() {
-    return new Promise((resolve, reject) => {
-        const req = indexedDB.open(LLM_DB_NAME);
-        req.onupgradeneeded = (e) => e.target.transaction.abort();   // DB 가 없으면 빈 DB 를 만들지 않음
-        req.onerror = () => reject(new Error('indexedDB open error'));
-        req.onsuccess = (e) => resolve(e.target.result);
-    });
-}
-
-async function llmGetTranslation(originalText) {
-    const db = await llmOpenDB();
-    try {
-        return await new Promise((resolve, reject) => {
-            const tx = db.transaction(LLM_STORE_NAME, 'readonly');
-            const req = tx.objectStore(LLM_STORE_NAME).index('originalText').get(originalText);
-            req.onsuccess = () => resolve(req.result?.translation ?? null);
-            req.onerror = () => reject(new Error('get error'));
-        });
-    } finally {
-        db.close();
-    }
-}
-
-async function llmPutTranslation(originalText, translation) {
-    const db = await llmOpenDB();
-    try {
-        return await new Promise((resolve, reject) => {
-            const tx = db.transaction(LLM_STORE_NAME, 'readwrite');
-            const store = tx.objectStore(LLM_STORE_NAME);
-            const req = store.index('originalText').get(originalText);
-            req.onsuccess = () => {
-                const rec = req.result;
-                if (!rec) { resolve(false); return; }
-                const put = store.put({ ...rec, translation });
-                put.onerror = () => reject(new Error('put error'));
-            };
-            req.onerror = () => reject(new Error('get error'));
-            tx.oncomplete = () => resolve(true);
-            tx.onerror = () => reject(new Error('transaction error'));
-        });
-    } finally {
-        db.close();
-    }
-}
-
-// LLM 번역 편집의 기본 경로: DB 의 번역문을 고치고, 번역 확장이 화면용 display_text 를 다시 만들게 함.
-// 원문(mes)은 건드리지 않음. DB 에서 못 찾거나 쓸 수 없으면 false (→ display_text 만 고치는 경로로 폴백)
-async function editLlmViaDB(mes, id, action, info, name) {
-    const c = ctx();
-    if (!c.executeSlashCommandsWithOptions || !('indexedDB' in window)) return false;
-    const msg = chat[id];
-    const originalText = c.substituteParams ? c.substituteParams(msg.mes, c.name1, msg.name) : msg.mes;
-
-    let tr;
-    try {
-        tr = await llmGetTranslation(originalText);
-    } catch (e) {
-        console.warn('[message-fold] LLM DB unavailable', e);
-        return false;
-    }
-    if (typeof tr !== 'string' || !tr) return false;
-
-    const selText = info.trans?.selText || info.text;
-    const loc = await locateBest(tr, selText, info.trans?.occAll ?? 0, id);
-    if (!loc) return false;
-
-    let nextTr;
-    if (action === 'delete') {
-        nextTr = loc.apply('');
-    } else {
-        const edited = await c.callGenericPopup(
-            `<h3>Edit selection</h3>
-             <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · translation only</div>`,
-            c.POPUP_TYPE.INPUT,
-            loc.shown,
-            { rows: Math.min(10, Math.max(3, loc.shown.split('\n').length + 1)), okButton: 'Save', cancelButton: 'Cancel' },
-        );
-        if (typeof edited !== 'string' || edited === loc.shown) return true;
-        nextTr = loc.apply(edited);
-    }
-    if (nextTr === tr) return true;
-    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return true;
-
-    // 편집창이 떠 있는 동안 원문이 바뀌었으면 중단
-    const nowOriginal = c.substituteParams ? c.substituteParams(chat[id].mes, c.name1, chat[id].name) : chat[id].mes;
-    if (nowOriginal !== originalText) {
-        window.toastr?.warning('The message changed; nothing was replaced.');
-        return true;
-    }
-    try {
-        const ok = await llmPutTranslation(originalText, nextTr);
-        if (!ok) return false;
-    } catch (e) {
-        console.warn('[message-fold] LLM DB write failed', e);
-        window.toastr?.error('Could not write the translation DB.');
-        return true;
-    }
-    // 번역 확장이 DB 의 번역문으로 display_text 를 다시 만들게 함 (LLM 호출 없음)
-    try {
-        await c.executeSlashCommandsWithOptions(`/LlmTranslateID messageId=${id}`);
-    } catch (e) {
-        console.warn('[message-fold] LlmTranslateID failed', e);
-        window.toastr?.warning('Saved to the translation DB, but the display could not be refreshed. Press the translate button once.');
-    }
-    return true;
-}
-
-// LLM 번역 전용 편집. 번역 span 의 내용(display_text 안쪽)만 바꾸고, 원문(mes)과 껍데기 태그는 건드리지 않음.
-//  action 'edit'   : 드래그한 글자를 바로 수정 (보이는 글자만 바뀌고, 사이에 낀 <i> 같은 태그는 그대로)
-//  action 'delete' : 드래그한 글자를 바로 삭제 (여러 줄에 걸쳐도 됨)
-//  action 'line'   : 드래그가 걸친 번역 줄(들) 전체를 태그 없이 편집
-async function editTranslationSpans(mes, id, action, info, name) {
-    const { callGenericPopup, POPUP_TYPE } = ctx();
-    const html = getField(id, 'display_text');
-    const pt = parseDualSpans(html).filter((x) => x.kind === 'translated');
-    if (!pt.length) return false;                       // 함께 보기 HTML 이 아님 → 호출한 쪽이 일반 경로로 처리
-
-    const stillHere = () => mes.isConnected && Number(mes.getAttribute('mesid')) === id;
-    const unchanged = () => getField(id, 'display_text') === html;
-    let targets = mapTranslatedSpans(pt, info.trans);
-    let exact = true;
-    if (!targets || !targets.length) {                  // 어느 줄인지 못 정하면 번역 줄 전체를 대상으로 (그래도 태그는 안 보임)
-        targets = pt;
-        exact = false;
-    }
-
-    // ----- 삭제: 번역문에서만 지움 -----
-    if (action === 'delete') {
-        // 줄 하나 안: 그 줄 안에서 몇 번째 등장인지까지 맞춰서 정확히 지움
-        // 여러 줄: 통째로 선택된 줄은 내용을 비우고, 양 끝의 일부만 걸친 줄은 선택된 부분만 지움
-        const selText = info.trans?.selText || info.text;
-        const selNorm = normText(selText);
-        const segs = String(selText).split(/\n+/).map((x) => x.trim()).filter(Boolean);
-        const cands = exact ? targets : pt;
-        const edits = [];
-        for (const [k, t] of cands.entries()) {
-            let next = null;
-            const vis = normText(t.text);
-            if (cands.length === 1) {
-                let loc = await locateBest(t.text, selText, info.trans?.occ ?? 0, id);
-                for (const sg of segs) { if (loc) break; loc = await locateBest(t.text, sg, 0, id); }
-                if (loc) next = loc.apply('');
-            } else if (vis && selNorm.includes(vis)) {
-                next = removeRanges(t.text, visibleModel(t.text, 1).ranges, '');
-            } else {
-                for (const sg of segs) {
-                    const loc = await locateBest(t.text, sg, k === 0 ? 'last' : 0, id);
-                    if (loc) { next = loc.apply(''); break; }
-                }
-            }
-            if (next !== null && next !== t.text) edits.push({ t, next });
-        }
-        if (!edits.length) {
-            window.toastr?.warning('Nothing to delete was found in the translation.');
-            return true;
-        }
-        if (!stillHere() || !unchanged()) return true;
-        let out = html;
-        for (const { t, next } of edits.sort((x, y) => y.t.start - x.t.start)) {
-            out = out.slice(0, t.start) + next + out.slice(t.end);
-        }
-        await setDisplayText(id, out);
-        return true;
-    }
-
-    // ----- 선택한 글자 바로 수정 (줄 하나 안일 때) -----
-    if (action === 'edit' && exact && targets.length === 1) {
-        const sp = targets[0];
-        const loc = await locateBest(sp.text, info.trans?.selText || info.text, info.trans?.occ ?? 0, id);
-        if (loc) {
-            const edited = await callGenericPopup(
-                `<h3>Edit selection</h3>
-                 <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · translation only</div>`,
-                POPUP_TYPE.INPUT,
-                loc.shown,
-                { rows: Math.min(10, Math.max(3, loc.shown.split('\n').length + 1)), okButton: 'Save', cancelButton: 'Cancel' },
-            );
-            if (typeof edited !== 'string' || edited === loc.shown) return true;
-            if (!stillHere()) return true;
-            if (!unchanged()) {
-                window.toastr?.warning('The message changed; nothing was replaced.');
-                return true;
-            }
-            await setDisplayText(id, html.slice(0, sp.start) + loc.apply(edited) + html.slice(sp.end));
-            return true;
-        }
-        window.toastr?.info("Couldn't pinpoint the selected text, so the whole translated line is shown.");
-    }
-
-    // ----- 번역 줄 통째 편집 (태그 없이 내용만) -----
-    const seed = targets.map((t) => t.text).join(SPAN_DIVIDER);
-    const lines = seed.split('\n').length;
-    const note = (exact ? '' : "Couldn't pinpoint the line, so every translated line is shown. ")
-        + (action === 'edit' && targets.length > 1 ? 'The selection spans several lines, so whole lines are shown. ' : '')
-        + (targets.length > 1 ? 'Keep the ────────── dividers as they are. ' : '')
-        + 'Only the displayed translation changes; the original message is not touched.';
-    const edited = await callGenericPopup(
-        `<h3>Edit translated line</h3>
-         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${targets.length} line(s)</div>
-         <div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">${escapeHtml(note)}</div>`,
-        POPUP_TYPE.INPUT,
-        seed,
-        { rows: Math.min(18, Math.max(3, lines + 1)), okButton: 'Save', cancelButton: 'Cancel' },
-    );
-    if (typeof edited !== 'string' || edited === seed) return true;
-    if (!stillHere()) return true;
-
-    const parts = edited.split(SPAN_DIVIDER);
-    if (parts.length !== targets.length) {
-        window.toastr?.warning(`Divider lines were changed (expected ${targets.length} parts, got ${parts.length}). Nothing was saved.`);
-        return true;
-    }
-    if (!unchanged()) {
-        window.toastr?.warning('The message changed; nothing was replaced.');
-        return true;
-    }
-    // 뒤에서부터 바꿔야 앞쪽 위치가 안 밀림
-    let next = html;
-    for (let i = targets.length - 1; i >= 0; i--) {
-        next = next.slice(0, targets[i].start) + parts[i] + next.slice(targets[i].end);
-    }
-    await setDisplayText(id, next);
-    return true;
-}
-
-// LLM 번역 확장의 "번역문 수정" 버튼(.mes_edit_translation)을 대신 눌러서 그 확장의 수정창을 띄움.
-// 설정에서 그 버튼을 숨겨 놨어도(display:none) 눌러지고, 버튼이 없으면 false
-function openLlmTranslatorEdit(mes) {
-    const btn = mes.querySelector('.mes_edit_translation');
-    if (!btn) return false;
-    btn.click();   // 가짜 클릭(isTrusted=false): 아래 chatEl click 차단 로직이 막지 않도록 거기서 걸러 줌
-    return true;
-}
-
 // 선택 글자 메뉴
 //  1) 번역문(extra.display_text)이 없을 때
 //      - 선택한 글자가 원문에 그대로 있으면 → 기존 방식(정확한 위치 수정/삭제)
@@ -1370,14 +805,6 @@ async function showSelectionMenu(mes, info) {
     const name = chat[id].name || '';
     const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
     const translated = hasDisplayText(id);
-    const llm = translated && isLlmTranslated(id);
-
-    // LLM 번역 확장의 "원문 보기" 토글 중이면 display_text 가 원문이라서, 지금 고쳐도 토글하면 사라짐
-    if (llm && chat[id].extra?.original_translation_backup) {
-        window.toastr?.warning('The original text is being shown (LLM translator toggle). Switch back to the translation first.');
-        return;
-    }
-    if (llm) window.toastr?.info('LLM translation detected — the original text will not be touched.');
 
     const html = `<h3>Selected text</h3>
         <div style="text-align:left;opacity:.8;margin-top:8px">
@@ -1391,12 +818,9 @@ async function showSelectionMenu(mes, info) {
     const CUSTOM_ORIG = POPUP_RESULT?.CUSTOM2 ?? 1002;
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
 
-    // LLM 번역이 떠 있으면 원문 수정 버튼은 아예 없음 (번역문만 수정)
-    const customButtons = llm
-        ? [{ text: 'Edit', result: CUSTOM_EDIT }]
-        : translated
-            ? [{ text: 'Edit translation', result: CUSTOM_EDIT }, { text: 'Edit original', result: CUSTOM_ORIG }]
-            : [{ text: 'Edit', result: CUSTOM_EDIT }];
+    const customButtons = translated
+        ? [{ text: 'Edit translation', result: CUSTOM_EDIT }, { text: 'Edit original', result: CUSTOM_ORIG }]
+        : [{ text: 'Edit', result: CUSTOM_EDIT }];
 
     const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
         okButton: translated ? 'Delete (translation)' : 'Delete',
@@ -1408,25 +832,10 @@ async function showSelectionMenu(mes, info) {
     let action = null;
     if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
     else if (result === CUSTOM_EDIT) action = 'edit';
-    else if (translated && !llm && result === CUSTOM_ORIG) action = 'original';
+    else if (translated && result === CUSTOM_ORIG) action = 'original';
     if (!action) return;
 
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
-
-    // LLM 번역 + Edit: 우리 쪽 편집창 대신 LLM 번역 확장의 "번역문 수정" 기능으로 넘김
-    if (llm && action === 'edit') {
-        if (openLlmTranslatorEdit(mes)) {
-            window.toastr?.error('Selection edit is not available on LLM translations. Opening the translator\'s edit window instead.');
-            return;
-        }
-        window.toastr?.warning("Couldn't find the LLM translator's edit button; trying the built-in editor.");
-    }
-
-    // LLM 번역 + 함께 보기 HTML: 번역 줄 내용만 편집창에 띄우고 display_text 의 span 안쪽만 교체
-    // 1순위: 번역 확장의 DB(IndexedDB) 번역문을 직접 고치고 display_text 를 다시 만들게 함
-    if (llm && await editLlmViaDB(mes, id, action, info, name)) return;
-    // 2순위(DB 에서 못 찾았을 때): display_text 안의 번역 줄만 직접 고침
-    if (llm && await editTranslationSpans(mes, id, action, info, name)) return;
 
     // 번역문이 있으면: Edit original 만 원문(mes), 나머지(Edit/Delete)는 번역문(display_text)이 대상
     const field = (translated && action !== 'original') ? 'display_text' : 'mes';
