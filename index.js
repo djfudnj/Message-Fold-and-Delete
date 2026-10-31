@@ -23,7 +23,7 @@
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
 //      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
-//        (선택 글자 메뉴는 터치 전용의 별도 누르는 시간 설정을 가짐, 최소 200ms. 마우스는 일반 마우스 시간을 사용)
+//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 최소 200ms)
 //      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
 //      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
 //      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
@@ -55,8 +55,9 @@ const DEFAULTS = {
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
     holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
+    holdSelMouse: 300,      // 선택한 글자 위 길게? 누르기 시간 - 마우스(ms)
     holdSaved: null,        // 터치랑 마우스 저장
-    holdSelSaved: null,     // 텍스트 선택 터치 저장
+    holdSelSaved: null,     // 텍스트 선택 (터치 + 마우스) 저장
 };
 
 function settings() {
@@ -112,7 +113,7 @@ const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 
 // ===== 길게 누르기 설정 =====
 // 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
-// 선택한 글자 위 길게 누르기 시간은 터치에서만 settings().holdSelTouch 로 따로 조절 (마우스는 holdMouse 를 그대로 사용).
+// 선택한 글자 위 길게 누르기 시간은 settings().holdSelTouch(터치) / settings().holdSelMouse(마우스) 로 따로 조절.
 // 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
 const HOLD_MIN = 500;
 const SEL_HOLD_MIN = 200;
@@ -1655,10 +1656,10 @@ function initLongPress(chatEl) {
         const st = settings();
         const touchMs = holdTime(st.holdTouch, 750);
         if (selHit) {
-            // 선택한 글자 위: 터치는 별도 설정(holdSelTouch), 마우스는 일반 마우스 시간(holdMouse)을 사용
+            // 선택한 글자 위: 터치(holdSelTouch) / 마우스(holdSelMouse) 각각 별도 설정을 사용
             holdMs = isTouch
                 ? holdTime(st.holdSelTouch, DEFAULTS.holdSelTouch, SEL_HOLD_MIN)
-                : holdTime(st.holdMouse, DEFAULTS.holdMouse);
+                : holdTime(st.holdSelMouse, DEFAULTS.holdSelMouse, SEL_HOLD_MIN);
         } else {
             holdMs = isTouch ? touchMs : holdTime(st.holdMouse, DEFAULTS.holdMouse);
         }
@@ -1894,11 +1895,16 @@ function initSettingsPanel() {
                             </span>
                         </div>
                         <label class="mf-range">
+                            <span class="mf-range-name">Mouse</span>
+                            <input type="range" id="mf_hold_sel_mouse" min="200" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_sel_mouse_val"></span>
+                        </label>
+                        <label class="mf-range">
                             <span class="mf-range-name">Touch</span>
                             <input type="range" id="mf_hold_sel_touch" min="200" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_sel_touch_val"></span>
                         </label>
-                        <small class="mf-desc">How long to press selected text on a touch screen before the Edit / Delete popup appears. If your device starts dragging the text first (e.g. Android), lower this. With a mouse, the Hold time above is used.</small>
+                        <small class="mf-desc">How long to press selected text before the Edit / Delete popup appears. Mouse: lower it to open the popup right after you drag-select and click the selection. Touch: if your device starts dragging the text first (e.g. Android), lower this.</small>
                     </div>
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
@@ -1969,6 +1975,7 @@ function initSettingsPanel() {
     ];
 
     const holdSelSliders = [
+        { ...bindRange('mf_hold_sel_mouse', 'holdSelMouse', DEFAULTS.holdSelMouse, SEL_HOLD_MIN), key: 'holdSelMouse' },
         { ...bindRange('mf_hold_sel_touch', 'holdSelTouch', DEFAULTS.holdSelTouch, SEL_HOLD_MIN), key: 'holdSelTouch' },
     ];
 
