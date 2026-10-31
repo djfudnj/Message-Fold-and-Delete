@@ -519,10 +519,7 @@ function getSelectionInfo() {
         }
         : null;
 
-    // 안내문에 인용할 선택 글자 (줄 단위)
-    const lines = sel.toString().split(/\n+/).map((t) => t.trim()).filter(Boolean);
-
-    return { mes, text, occurrence, occurrenceC, para, lines: lines.length ? lines : [text] };
+    return { mes, text, occurrence, occurrenceC, para };
 }
 
 // (x, y) 가 현재 선택 영역 위인지
@@ -699,6 +696,8 @@ async function mapParagraph(id, field, para) {
     }
 }
 
+const QUOTE_MAX = 50;   // 편집창 안내문에 인용하는 선택 글자 최대 길이
+
 // 문단 단위(성공 시) 또는 메시지 통째(실패 시)로 편집창을 띄워 수정
 async function editByParagraph(mes, id, field, info, name) {
     const { callGenericPopup, POPUP_TYPE } = ctx();
@@ -711,20 +710,23 @@ async function editByParagraph(mes, id, field, info, name) {
     const fieldLabel = field === 'display_text' ? 'translation' : 'original';
     const rangeLabel = map && map.last > map.index ? `${map.index + 1}–${map.last + 1}` : map ? `${map.index + 1}` : '';
     const scope = map ? `${fieldLabel} paragraph ${rangeLabel} / ${map.count}` : `whole ${fieldLabel} message`;
-    // 내가 선택했던 글자를 인용: 3줄을 넘으면 앞 2줄만 보여주고 뒤는 …
-    const clip = (t) => (t.length > 120 ? t.slice(0, 120) + '…' : t);
-    const ql = (info.lines?.length ? info.lines : [info.text]).map(clip);
-    const quote = (ql.length > 3 ? [...ql.slice(0, 2), '…'] : ql).map(escapeHtml).join('<br>');
+    // 내가 선택했던 글자를 통째로 인용 (문단 구분 없이 한 덩어리). 50자를 넘으면 뒤는 …
+    const qFlat = info.text.replace(/\s+/g, ' ').trim();
+    const qText = qFlat.length > QUOTE_MAX ? qFlat.slice(0, QUOTE_MAX) + '…' : qFlat;
     const notice = `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">`
         + `Couldn't match your selection exactly, so the whole ${map ? 'paragraph' + (map.last > map.index ? 's' : '') : 'message'} is shown below.`
-        + `<br><br>Your selection:<br>“${quote}”</div>`;
+        + `<br><br>Your selection:<br>“${escapeHtml(qText)}”</div>`;
 
     const edited = await callGenericPopup(
         `<h3>Edit ${fieldLabel}</h3>
          <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${notice}`,
         POPUP_TYPE.INPUT,
         seed,
-        { rows: map ? Math.min(16, 6 + 3 * (map.last - map.index)) : 16, okButton: 'Save', cancelButton: 'Cancel' },
+        {
+            rows: map ? Math.min(16, 6 + 3 * (map.last - map.index)) : 16,
+            okButton: 'Save',
+            cancelButton: 'Cancel',
+        },
     );
     if (typeof edited !== 'string' || edited === seed) return;
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
