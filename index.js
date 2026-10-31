@@ -498,6 +498,13 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
+    // 공백을 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지 (여러 문단에 걸친 선택은 문단 사이 줄바꿈이
+    // 화면 글자(range.toString)와 저장 텍스트에서 서로 달라서, 공백을 무시하고 위치를 찾기 위함)
+    const squash = (t) => t.replace(/\s+/g, '');
+    const fullC = squash(full), textC = squash(text), preC = squash(pre.toString()).length;
+    let occurrenceC = 0;
+    for (let i = textC ? fullC.indexOf(textC) : -1; i !== -1 && i < preC; i = fullC.indexOf(textC, i + 1)) occurrenceC++;
+
     // 선택이 걸친 <p> 들의 범위 (여러 문단에 걸쳐도 됨). 경계에 닿기만 하고 글자가 안 걸린 문단은 제외
     const ps = paraList(a);
     const hasText = (p) => {
@@ -590,7 +597,7 @@ function getSelectionInfo() {
         }
     }
 
-    return { mes, text, occurrence, para, trans };
+    return { mes, text, occurrence, occurrenceC, para, trans };
 }
 
 // (x, y) 가 현재 선택 영역 위인지
@@ -613,6 +620,26 @@ function findInRaw(raw, text, occurrence) {
     if (!idx.length) return null;
     const start = idx[occurrence] ?? (idx.length === 1 ? idx[0] : undefined);
     return start === undefined ? null : { start, end: start + text.length };
+}
+
+// 공백(줄바꿈 포함) 차이를 무시하고 찾기: 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고
+// 저장 텍스트에는 "\n\n" 이 있어서 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+function findInRawLoose(raw, text, occurrence) {
+    const want = text.replace(/\s+/g, '');
+    if (!want) return null;
+    const chars = [], map = [];
+    for (let i = 0; i < raw.length; i++) {
+        if (/\s/.test(raw[i])) continue;
+        chars.push(raw[i]);
+        map.push(i);
+    }
+    const squashed = chars.join('');
+    const idx = [];
+    for (let i = squashed.indexOf(want); i !== -1; i = squashed.indexOf(want, i + 1)) idx.push(i);
+    if (!idx.length) return null;
+    const st = idx[occurrence] ?? (idx.length === 1 ? idx[0] : undefined);
+    if (st === undefined) return null;
+    return { start: map[st], end: map[st + want.length - 1] + 1 };
 }
 
 // display_text 값을 쓰거나(빈 값이면 삭제) 현재 스와이프의 extra 에도 같이 반영
@@ -1447,6 +1474,19 @@ async function showSelectionMenu(mes, info) {
         return;
     }
 
+    // 줄바꿈/공백만 다른 경우(여러 문단에 걸친 선택): 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
+    {
+        const raw = getField(id, field);
+        const loose = findInRawLoose(raw, text, info.occurrenceC ?? 0);
+        if (loose) {
+            const exact = raw.slice(loose.start, loose.end);
+            let occ = 0;
+            for (let i = raw.indexOf(exact); i !== -1 && i < loose.start; i = raw.indexOf(exact, i + 1)) occ++;
+            await editExact(mes, id, field, action, { ...info, text: exact, occurrence: occ }, name, sourceLabel);
+            return;
+        }
+    }
+
     // 그대로는 없음 (마크다운/XML/정규식 등으로 화면과 저장 텍스트가 다름) → 문단 매칭 폴백
     if (action === 'delete') {
         window.toastr?.warning('Could not locate the exact text. Use Edit to change the whole paragraph instead.');
@@ -1984,6 +2024,7 @@ function initSettingsPanel() {
     //  - 저장 버튼: 현재 슬라이더 값(마우스/터치)을 savedKey 에 보관
     //  - 초기화 버튼: 저장해 둔 값이 있으면 그 값으로, 없으면 기본값으로 되돌림
     const bindHoldButtons = (saveId, resetId, sliders, savedKey, label, min) => {
+        // (슬라이더마다 최소값이 다를 수 있음: 각 슬라이더의 min 이 있으면 우선 사용)
         wrap.querySelector(`#${saveId}`).addEventListener('click', () => {
             const st = settings();
             st[savedKey] = {};
