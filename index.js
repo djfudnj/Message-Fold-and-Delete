@@ -23,7 +23,7 @@
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
 //      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
-//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 최소 200ms)
+//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 터치 최소 200ms / 마우스 최소 10ms)
 //      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
 //      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
 //      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
@@ -55,7 +55,7 @@ const DEFAULTS = {
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
     holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
-    holdSelMouse: 300,      // 선택한 글자 위 길게? 누르기 시간 - 마우스(ms)
+    holdSelMouse: 200,      // 선택한 글자 위 길게? 누르기 시간 - 마우스(ms)
     holdSaved: null,        // 터치랑 마우스 저장
     holdSelSaved: null,     // 텍스트 선택 (터치 + 마우스) 저장
 };
@@ -117,6 +117,7 @@ const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 // 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
 const HOLD_MIN = 500;
 const SEL_HOLD_MIN = 200;
+const SEL_HOLD_MIN_MOUSE = 10;   // 마우스는 드래그 직후 바로 클릭해도 뜨도록 더 낮게 허용
 const HOLD_MAX = 1000;
 const holdTime = (v, fallback, min = HOLD_MIN) => {
     const n = Number(v);
@@ -1659,7 +1660,7 @@ function initLongPress(chatEl) {
             // 선택한 글자 위: 터치(holdSelTouch) / 마우스(holdSelMouse) 각각 별도 설정을 사용
             holdMs = isTouch
                 ? holdTime(st.holdSelTouch, DEFAULTS.holdSelTouch, SEL_HOLD_MIN)
-                : holdTime(st.holdSelMouse, DEFAULTS.holdSelMouse, SEL_HOLD_MIN);
+                : holdTime(st.holdSelMouse, DEFAULTS.holdSelMouse, SEL_HOLD_MIN_MOUSE);
         } else {
             holdMs = isTouch ? touchMs : holdTime(st.holdMouse, DEFAULTS.holdMouse);
         }
@@ -1896,7 +1897,7 @@ function initSettingsPanel() {
                         </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
-                            <input type="range" id="mf_hold_sel_mouse" min="200" max="1000" step="10">
+                            <input type="range" id="mf_hold_sel_mouse" min="10" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_sel_mouse_val"></span>
                         </label>
                         <label class="mf-range">
@@ -1975,7 +1976,7 @@ function initSettingsPanel() {
     ];
 
     const holdSelSliders = [
-        { ...bindRange('mf_hold_sel_mouse', 'holdSelMouse', DEFAULTS.holdSelMouse, SEL_HOLD_MIN), key: 'holdSelMouse' },
+        { ...bindRange('mf_hold_sel_mouse', 'holdSelMouse', DEFAULTS.holdSelMouse, SEL_HOLD_MIN_MOUSE), key: 'holdSelMouse', min: SEL_HOLD_MIN_MOUSE },
         { ...bindRange('mf_hold_sel_touch', 'holdSelTouch', DEFAULTS.holdSelTouch, SEL_HOLD_MIN), key: 'holdSelTouch' },
     ];
 
@@ -1992,8 +1993,8 @@ function initSettingsPanel() {
         });
         wrap.querySelector(`#${resetId}`).addEventListener('click', () => {
             const st = settings();
-            for (const { el, show, key } of sliders) {
-                const v = holdTime(st[savedKey]?.[key], DEFAULTS[key], min);
+            for (const { el, show, key, min: m } of sliders) {
+                const v = holdTime(st[savedKey]?.[key], DEFAULTS[key], m ?? min);
                 el.value = v;
                 st[key] = v;
                 show();
