@@ -10,10 +10,15 @@
 //  - 글자를 드래그로 선택한 뒤, 손을 떼고 선택된 글자 위를 다시 길게 누르면
 //    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
 //  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
+//  - 선택한 글자가 저장된 텍스트에 그대로 없으면(마크다운/XML/정규식 등으로 화면이 달라진 경우)
+//    SillyTavern 본체의 messageFormatting 으로 <p> 문단을 맞춰서 해당 문단을 통째로 편집합니다. (실패하면 메시지 통째 편집)
+//  - 번역문(extra.display_text)이 있는 메시지는 Edit translation(번역문만 수정, 원문 mes 는 안 바뀜) /
+//    Edit original(원문을 <p> 문단 단위로만 매칭해서 수정) 중에 고를 수 있습니다.
 //  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
 //  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
 //  - 확장 패널 옵션
 //      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
+//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 터치 최소 200ms / 마우스 최소 10ms)
 //      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
 //      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
 //      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
@@ -44,6 +49,10 @@ const DEFAULTS = {
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
+    holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
+    holdSelMouse: 200,      // 선택한 글자 위 길게? 누르기 시간 - 마우스(ms)
+    holdSaved: null,        // 터치랑 마우스 저장
+    holdSelSaved: null,     // 텍스트 선택 (터치 + 마우스) 저장
 };
 
 function settings() {
@@ -98,13 +107,16 @@ const TITLE_UNSET = 'Unfold message';
 const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 
 // ===== 길게 누르기 설정 =====
-// 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서 조절.
-// 터치로 이미 선택된 글자 위를 누를 때는 터치 시간의 80% 를 사용
+// 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
+// 선택한 글자 위 길게 누르기 시간은 settings().holdSelTouch(터치) / settings().holdSelMouse(마우스) 로 따로 조절.
+// 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
 const HOLD_MIN = 500;
+const SEL_HOLD_MIN = 200;
+const SEL_HOLD_MIN_MOUSE = 10;   // 마우스는 드래그 직후 바로 클릭해도 뜨도록 더 낮게 허용
 const HOLD_MAX = 1000;
-const holdTime = (v, fallback) => {
+const holdTime = (v, fallback, min = HOLD_MIN) => {
     const n = Number(v);
-    return Number.isFinite(n) ? Math.min(HOLD_MAX, Math.max(HOLD_MIN, n)) : fallback;
+    return Number.isFinite(n) ? Math.min(HOLD_MAX, Math.max(min, n)) : fallback;
 };
 const VISUAL_MS = 300;      // 팝업 직전 이 시간 동안 테두리가 서서히 진해짐
 const AFTER_POPUP_MS = 80; // 팝업이 뜬 뒤에도 테두리를 유지하는 시간
@@ -138,59 +150,6 @@ let openId = null;
 
 const isFolded = (id) => !!chat[id]?.extra?.[KEY];
 
-// 테마가 덮어써도 바가 항상 보이도록 인라인 !important 로 지정
-function setImportant(el, styles) {
-    for (const [prop, val] of Object.entries(styles)) {
-        el.style.setProperty(prop, val, 'important');
-    }
-}
-
-function clearImportant(el, props) {
-    props.forEach((p) => el.style.removeProperty(p));
-}
-
-const FIX_PROPS = ['height', 'min-height', 'max-height', 'overflow'];
-
-function styleBar(ph, collapsed, block) {
-    if (!collapsed) {
-        setImportant(ph, { display: 'none' });
-        return;
-    }
-    // .mes_block 의 좌우 padding 만큼 바깥으로 확장해서 블록 전체 폭에 맞춤
-    let pl = 0;
-    let pr = 0;
-    if (block) {
-        const cs = getComputedStyle(block);
-        pl = parseFloat(cs.paddingLeft) || 0;
-        pr = parseFloat(cs.paddingRight) || 0;
-    }
-    // .mes_block 의 폭을 그대로 따라가며, 테마 색상 변수로 배경/테두리를 입힘
-    setImportant(ph, {
-        display: 'flex',
-        'align-items': 'center',
-        gap: '8px',
-        width: `calc(100% + ${pl + pr}px)`,
-        'min-height': 'var(--mf-min-height, 34px)',
-        'box-sizing': 'border-box',
-        padding: '6px 10px',
-        'margin-left': `${-pl}px`,
-        'margin-right': `${-pr}px`,
-        'margin-top': '0',
-        'margin-bottom': '0',
-        position: 'relative',
-        visibility: 'visible',
-        opacity: '1',
-        overflow: 'hidden',
-        cursor: 'pointer',
-        color: 'var(--SmartThemeBodyColor, #ddd)',
-        background: 'var(--SmartThemeBlurTintColor, rgba(128,128,128,.18))',
-        border: '1px solid var(--SmartThemeBorderColor, rgba(128,128,128,.5))',
-        'border-radius': '8px',
-        'font-size': '13px',
-        'line-height': '1.4',
-    });
-}
-
 function makePreview(id) {
     const msg = chat[id];
     const raw = String(msg?.mes ?? '')
@@ -202,6 +161,45 @@ function makePreview(id) {
     return { name: msg?.name ?? '', snippet };
 }
 
+// 접힌 바 안의 내용(아이콘 / 이름 / 미리보기)을 만든다.
+// 모양은 전부 style.css 가 정하므로 여기서는 DOM 만 만들고, 내용이 실제로 바뀐 경우에만 다시 만든다.
+// (펼침/접힘 전환 때는 .mf-folded 클래스만 바뀌고 바는 그대로 재사용됨)
+function ensureBar(ph, id) {
+    const msg = chat[id];
+    // 숨김(hide) 처리된 메시지(is_system, comment 포함)는 유령 아이콘, 숨김 해제된 comment 는 말풍선, 그 외는 ▶
+    const kind = msg?.is_system ? 'hidden' : (isComment(msg) ? 'comment' : 'normal');
+    const sig = ph._mfSig;
+    if (sig && sig.mes === msg?.mes && sig.name === msg?.name && sig.kind === kind) return;
+    ph._mfSig = { mes: msg?.mes, name: msg?.name, kind };
+
+    const { name, snippet } = makePreview(id);
+    let arrow;
+    if (kind === 'hidden') {
+        arrow = document.createElement('i');
+        arrow.className = 'fa-solid fa-ghost';
+        arrow.title = 'Hidden message';
+    } else if (kind === 'comment') {
+        arrow = document.createElement('i');
+        arrow.className = 'fa-solid fa-comment-dots';
+        arrow.title = 'Comment';
+    } else {
+        arrow = document.createElement('span');
+        arrow.textContent = '▶';
+    }
+    arrow.classList.add('mf-ph-icon');
+    const nm = document.createElement('b');
+    nm.className = 'mf-ph-name';
+    nm.textContent = name;
+    const tx = document.createElement('span');
+    tx.className = 'mf-ph-text';
+    tx.textContent = snippet ? `— ${snippet}` : '';
+    ph.replaceChildren(arrow, nm, tx);
+}
+
+// 값이 같으면 건드리지 않음 (불필요한 style 속성 갱신 방지)
+const setDisplay = (el, v) => { if (el.style.display !== v) el.style.display = v; };
+
+// 메시지 하나의 접힘 표시를 갱신. 클래스 토글이 전부라서 매우 가볍다.
 function render(mes) {
     const id = Number(mes.getAttribute('mesid'));
     const folded = isFolded(id);                 // 저장된 접힘 상태
@@ -220,52 +218,26 @@ function render(mes) {
         // 예전 버전(아이콘이 번갈아 바뀌던 단일 버튼)에서 남은 클래스 정리
         foldBtn.classList.remove(ICON_UNSET);
         foldBtn.classList.add(ICON_SET);
-        foldBtn.title = TITLE_SET;
-        foldBtn.style.display = (folded || replaceFold) ? 'none' : '';
+        if (foldBtn.title !== TITLE_SET) foldBtn.title = TITLE_SET;
+        setDisplay(foldBtn, (folded || replaceFold) ? 'none' : '');
     }
     const unfoldBtn = mes.querySelector('.mes_unfold');
     if (unfoldBtn) {
-        unfoldBtn.style.display = (folded && !replaceFold) ? '' : 'none';
+        setDisplay(unfoldBtn, (folded && !replaceFold) ? '' : 'none');
     }
 
-    // 높이만 풀어줌 (display/padding/폭은 테마 그대로 유지)
-    const block = mes.querySelector('.mes_block');
-    [mes, block].forEach((el) => {
-        if (!el) return;
-        if (collapsed) setImportant(el, { height: 'auto', 'min-height': '0', 'max-height': 'none', overflow: 'visible' });
-        else clearImportant(el, FIX_PROPS);
-    });
-
-    const ph = mes.querySelector('.mf-placeholder');
-    if (ph) {
-        if (collapsed) {
-            const { name, snippet } = makePreview(id);
-            ph.replaceChildren();
-            // 숨김(hide) 처리된 메시지(is_system, comment 포함)는 유령 아이콘, 숨김 해제된 comment 는 말풍선, 그 외는 ▶
-            let arrow;
-            if (chat[id]?.is_system) {
-                arrow = document.createElement('i');
-                arrow.className = 'fa-solid fa-ghost';
-                arrow.title = 'Hidden message';
-            } else if (isComment(chat[id])) {
-                arrow = document.createElement('i');
-                arrow.className = 'fa-solid fa-comment-dots';
-                arrow.title = 'Comment';
-            } else {
-                arrow = document.createElement('span');
-                arrow.textContent = '▶';
-            }
-            arrow.style.setProperty('flex', '0 0 auto');
-            const nm = document.createElement('b');
-            nm.textContent = name;
-            nm.style.setProperty('flex', '0 0 auto');
-            const tx = document.createElement('span');
-            tx.textContent = snippet ? `— ${snippet}` : '';
-            setImportant(tx, { 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap', opacity: '0.8' });
-            ph.append(arrow, nm, tx);
-        }
-        styleBar(ph, collapsed, block);
+    // 접힌 메시지만 바 내용을 준비 (보이고 숨기는 건 CSS 가 .mf-folded 로 처리)
+    if (folded) {
+        const ph = mes.querySelector('.mf-placeholder');
+        if (ph) ensureBar(ph, id);
     }
+}
+
+// id 로 메시지를 찾아 그 메시지만 갱신
+function renderById(id) {
+    if (id === null || id === undefined) return;
+    const mes = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    if (mes) render(mes);
 }
 
 function decorate(mes) {
@@ -401,8 +373,10 @@ function openTemp(mes) {
 
     lastTap = { id: -1, time: 0 };   // 바를 연 클릭이 더블클릭의 첫 번째로 계산되지 않게
     if (openId === id) return;
+    const prev = openId;
     openId = id;
-    refreshAll();
+    renderById(prev);   // 이전에 펼쳐져 있던 메시지는 다시 접고
+    render(mes);        // 새로 누른 메시지만 펼침 (나머지 메시지는 건드리지 않음)
 }
 
 // 더블클릭/더블탭 감지용 (모바일은 dblclick 이 불안정해서 click 시각으로 직접 판정)
@@ -412,8 +386,9 @@ let lastTap = { id: -1, time: 0 };
 // 임시로 펼친 메시지를 다시 접음
 function closeTemp() {
     if (openId === null) return;
+    const prev = openId;
     openId = null;
-    refreshAll();
+    renderById(prev);
 }
 
 function onDocumentClick(e) {
@@ -518,7 +493,33 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    return { mes, text, occurrence };
+    // 공백을 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지 (여러 문단에 걸친 선택은 문단 사이 줄바꿈이
+    // 화면 글자(range.toString)와 저장 텍스트에서 서로 달라서, 공백을 무시하고 위치를 찾기 위함)
+    const squash = (t) => t.replace(/\s+/g, '');
+    const fullC = squash(full), textC = squash(text), preC = squash(pre.toString()).length;
+    let occurrenceC = 0;
+    for (let i = textC ? fullC.indexOf(textC) : -1; i !== -1 && i < preC; i = fullC.indexOf(textC, i + 1)) occurrenceC++;
+
+    // 선택이 걸친 <p> 들의 범위 (여러 문단에 걸쳐도 됨). 경계에 닿기만 하고 글자가 안 걸린 문단은 제외
+    const ps = paraList(a);
+    const hasText = (p) => {
+        const r = document.createRange();
+        r.selectNodeContents(p);
+        if (p.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
+        if (p.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
+        return r.toString().trim() !== '';
+    };
+    const hit = ps.map((p, i) => ({ p, i })).filter(({ p }) => range.intersectsNode(p) && hasText(p));
+    const para = hit.length
+        ? {
+            index: hit[0].i,
+            last: hit[hit.length - 1].i,
+            count: ps.length,
+            text: hit.map((h) => h.p.textContent.trim()).join('\n\n'),
+        }
+        : null;
+
+    return { mes, text, occurrence, occurrenceC, para };
 }
 
 // (x, y) 가 현재 선택 영역 위인지
@@ -534,7 +535,7 @@ function pointOnSelection(x, y) {
     return false;
 }
 
-// 화면에 보이는 글자를 저장된 원문(chat[id].mes)에서 찾음
+// 화면에 보이는 글자를 저장된 텍스트(원문 또는 번역문)에서 찾음
 function findInRaw(raw, text, occurrence) {
     const idx = [];
     for (let i = raw.indexOf(text); i !== -1; i = raw.indexOf(text, i + 1)) idx.push(i);
@@ -543,7 +544,40 @@ function findInRaw(raw, text, occurrence) {
     return start === undefined ? null : { start, end: start + text.length };
 }
 
-// 메시지 본문을 통째로 교체하고 저장 (SillyTavern 기본 편집 저장과 같은 순서)
+// 공백(줄바꿈 포함) 차이를 무시하고 찾기: 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고
+// 저장 텍스트에는 "\n\n" 이 있어서 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+function findInRawLoose(raw, text, occurrence) {
+    const want = text.replace(/\s+/g, '');
+    if (!want) return null;
+    const chars = [], map = [];
+    for (let i = 0; i < raw.length; i++) {
+        if (/\s/.test(raw[i])) continue;
+        chars.push(raw[i]);
+        map.push(i);
+    }
+    const squashed = chars.join('');
+    const idx = [];
+    for (let i = squashed.indexOf(want); i !== -1; i = squashed.indexOf(want, i + 1)) idx.push(i);
+    if (!idx.length) return null;
+    const st = idx[occurrence] ?? (idx.length === 1 ? idx[0] : undefined);
+    if (st === undefined) return null;
+    return { start: map[st], end: map[st + want.length - 1] + 1 };
+}
+
+// display_text 값을 쓰거나(빈 값이면 삭제) 현재 스와이프의 extra 에도 같이 반영
+function writeDisplayText(msg, next) {
+    msg.extra ??= {};
+    const swipeExtra = Array.isArray(msg.swipe_info) ? msg.swipe_info[msg.swipe_id]?.extra : null;
+    if (next) {
+        msg.extra.display_text = next;
+        if (swipeExtra) swipeExtra.display_text = next;
+    } else {
+        delete msg.extra.display_text;
+        if (swipeExtra) delete swipeExtra.display_text;
+    }
+}
+
+// 메시지 본문(mes)을 통째로 교체하고 저장 (SillyTavern 기본 편집 저장과 같은 순서)
 async function setMessageText(id, next) {
     const msg = chat[id];
     if (!msg) return;
@@ -557,76 +591,178 @@ async function setMessageText(id, next) {
     await saveChatConditional();
 }
 
-async function replaceSelection(id, text, occurrence, replacement) {
-    const raw = String(chat[id]?.mes ?? '');
+// 화면에 보이는 번역문(extra.display_text)만 교체하고 저장. mes(프롬프트에 들어가는 원문)는 건드리지 않음.
+// MESSAGE_EDITED 는 일부러 보내지 않음 (번역 확장이 자동 재번역으로 덮어쓰는 것 방지)
+async function setDisplayText(id, next) {
+    const msg = chat[id];
+    if (!msg) return;
+    writeDisplayText(msg, next);
+    updateMessageBlock(id, msg);
+    await eventSource.emit(event_types.MESSAGE_UPDATED, id);
+    await saveChatConditional();
+}
+
+// ----- 편집 대상 필드: 'mes'(원문) / 'display_text'(번역문) -----
+const hasDisplayText = (id) => !!chat[id]?.extra?.display_text;
+const getField = (id, field) => String(field === 'display_text' ? (chat[id]?.extra?.display_text ?? '') : (chat[id]?.mes ?? ''));
+const setField = (id, field, next) => (field === 'display_text' ? setDisplayText(id, next) : setMessageText(id, next));
+
+async function replaceSelection(id, field, text, occurrence, replacement) {
+    const raw = getField(id, field);
     const loc = findInRaw(raw, text, occurrence);
     if (!loc) {
         window.toastr?.warning('Could not locate the selected text in the message source.');
         return;
     }
-    await setMessageText(id, raw.slice(0, loc.start) + replacement + raw.slice(loc.end));
+    await setField(id, field, raw.slice(0, loc.start) + replacement + raw.slice(loc.end));
 }
 
 const countOccurrences = (raw, text) => (text ? raw.split(text).length - 1 : 0);
 
-async function showSelectionMenu(mes, info) {
-    const id = Number(mes.getAttribute('mesid'));
-    if (Number.isNaN(id) || !chat[id]) return;
+// ===================== 문단(<p>) 단위 매칭 =====================
+// 글자가 그대로 일치하지 않을 때(마크다운/XML/정규식/번역) 쓰는 폴백.
+// 우리가 마크다운 규칙을 흉내 내지 않고, SillyTavern 본체의 messageFormatting 을 그대로 돌려서
+// 나온 <p> 개수로 "화면의 n번째 문단 = 저장 텍스트의 n번째 문단" 을 맞춘다.
 
-    const { text, occurrence } = info;
-    const name = chat[id].name || '';
-    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+// <p> 중에서 코드블록/표 안의 것은 양쪽 모두 세지 않음
+const paraList = (root) => [...root.querySelectorAll('p')].filter((p) => !p.closest('pre, table, code'));
 
-    const html = `<h3>Selected text</h3>
-        <div style="text-align:left;opacity:.8;margin-top:8px">
-            <b>#${id}</b> ${escapeHtml(name)}<br>“${escapeHtml(preview)}”
-        </div>`;
+let _fmt = null;
+async function getFormatter() {
+    if (_fmt) return _fmt;
+    try {
+        // 정적 import 로 두면 messageFormatting 이 없는 버전에서 확장 전체가 로드 실패하므로 동적 import
+        const mod = await import('../../../../script.js');
+        if (typeof mod.messageFormatting === 'function') _fmt = mod.messageFormatting;
+    } catch (e) {
+        console.warn('[message-fold] messageFormatting unavailable', e);
+    }
+    return _fmt;
+}
 
-    const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
-    if (!callGenericPopup || !POPUP_TYPE) return;
+// 텍스트를 빈 줄 기준 블록으로 나눔 (코드펜스 안의 빈 줄은 무시). 각 블록의 원문 내 위치를 같이 돌려줌
+function splitBlocks(text) {
+    const blocks = [];
+    let pos = 0, cur = null, fence = null;
+    for (const line of text.split('\n')) {
+        const lineStart = pos;
+        const lineEnd = pos + line.length;
+        pos = lineEnd + 1;
+        const t = line.trim();
+        const fm = /^(```|~~~)/.exec(t);
+        if (fm) {
+            if (!fence) fence = fm[1];
+            else if (fm[1] === fence) fence = null;
+        }
+        if (t === '' && !fence) {
+            if (cur) { blocks.push(cur); cur = null; }
+            continue;
+        }
+        if (!cur) cur = { start: lineStart, end: lineEnd };
+        else cur.end = lineEnd;
+    }
+    if (cur) blocks.push(cur);
+    return blocks.map((b) => ({ ...b, text: text.slice(b.start, b.end) }));
+}
 
-    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM1 ?? 1001;
-    const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
+// 화면에서 고른 문단(para.index)에 대응하는 저장 텍스트 블록을 찾는다. 실패하면 null (→ 메시지 통째 편집)
+async function mapParagraph(id, field, para) {
+    if (!para || para.index < 0) return null;
+    const fmt = await getFormatter();
+    if (!fmt) return null;
+    const msg = chat[id];
+    const val = getField(id, field);
+    const countP = (s) => {
+        const html = fmt(s, msg.name, !!msg.is_system, !!msg.is_user, id);
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');   // 비활성 문서: 이미지 로드/스크립트 실행 없음
+        return paraList(doc.body).length;
+    };
+    try {
+        const blocks = splitBlocks(val);
+        let acc = 0;
+        for (const b of blocks) { b.from = acc; acc += countP(b.text); b.to = acc; }
+        // 검증 1: 블록별로 센 합계 == 통째로 센 개수 (리스트/인용문/정규식 때문에 쪼개면 달라지는 경우 걸러냄)
+        if (acc !== countP(val)) { console.debug('[message-fold] block sum != whole', acc, countP(val)); return null; }
+        // 검증 2: 화면(DOM)의 문단 수와 같아야 함 (원문 ↔ 번역문 짝이 안 맞거나 정규식이 <p>를 만든 경우 걸러냄)
+        if (acc !== para.count) { console.debug('[message-fold] p count mismatch', acc, para.count); return null; }
+        const last = para.last ?? para.index;
+        const b0 = blocks.find((b) => para.index >= b.from && para.index < b.to);
+        const b1 = blocks.find((b) => last >= b.from && last < b.to);
+        if (!b0 || !b1) return null;
+        return { start: b0.start, end: b1.end, text: val.slice(b0.start, b1.end), index: para.index, last, count: acc };
+    } catch (e) {
+        console.warn('[message-fold] paragraph mapping failed', e);
+        return null;
+    }
+}
 
-    const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
-        okButton: 'Delete',
-        cancelButton: 'Cancel',
-        defaultResult: RESULT_CANCEL,
-        customButtons: [{ text: 'Edit', result: CUSTOM_EDIT }],
-    });
+const QUOTE_MAX = 50;   // 편집창 안내문에 인용하는 선택 글자 최대 길이
 
-    let action = null;
-    if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
-    else if (result === CUSTOM_EDIT) action = 'edit';
-    if (!action) return;
+// 문단 단위(성공 시) 또는 메시지 통째(실패 시)로 편집창을 띄워 수정
+async function editByParagraph(mes, id, field, info, name) {
+    const { callGenericPopup, POPUP_TYPE } = ctx();
+    const map = await mapParagraph(id, field, info.para);
+    const val = getField(id, field);
+    const start = map ? map.start : 0;
+    const end = map ? map.end : val.length;
+    const seed = val.slice(start, end);
 
+    const fieldLabel = field === 'display_text' ? 'translation' : 'original';
+    const rangeLabel = map && map.last > map.index ? `${map.index + 1}–${map.last + 1}` : map ? `${map.index + 1}` : '';
+    const scope = map ? `${fieldLabel} paragraph ${rangeLabel} / ${map.count}` : `whole ${fieldLabel} message`;
+    // 내가 선택했던 글자를 통째로 인용 (문단 구분 없이 한 덩어리). 50자를 넘으면 뒤는 …
+    const qFlat = info.text.replace(/\s+/g, ' ').trim();
+    const qText = qFlat.length > QUOTE_MAX ? qFlat.slice(0, QUOTE_MAX) + '…' : qFlat;
+    const notice = `<div style="text-align:left;opacity:.7;margin-top:8px;font-size:.9em">`
+        + `Couldn't match your selection exactly, so the whole ${map ? 'paragraph' + (map.last > map.index ? 's' : '') : 'message'} is shown below.`
+        + `<br><br>Your selection:<br>“${escapeHtml(qText)}”</div>`;
+
+    const edited = await callGenericPopup(
+        `<h3>Edit ${fieldLabel}</h3>
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)} · ${scope}</div>${notice}`,
+        POPUP_TYPE.INPUT,
+        seed,
+        {
+            rows: map ? Math.min(16, 6 + 3 * (map.last - map.index)) : 16,
+            okButton: 'Save',
+            cancelButton: 'Cancel',
+        },
+    );
+    if (typeof edited !== 'string' || edited === seed) return;
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
-    // 원문에 해당 글자가 없으면(매크로/정규식 등으로 화면과 원문이 다른 경우) 알림
-    const raw0 = String(chat[id].mes ?? '');
-    if (!raw0.includes(text)) {
-        window.toastr?.warning('Could not locate the selected text in the message source.');
+    // 편집창이 떠 있는 동안 내용이 바뀌었으면 중단
+    const cur = getField(id, field);
+    if (cur.slice(start, end) !== seed) {
+        window.toastr?.warning('The message changed; nothing was replaced.');
         return;
     }
+    await setField(id, field, cur.slice(0, start) + edited + cur.slice(end));
+}
+
+// 화면 글자가 저장 텍스트에 그대로 있을 때: 정확한 위치를 바꾸거나 지움 (기존 방식)
+async function editExact(mes, id, field, action, info, name, sourceLabel) {
+    const { callGenericPopup, POPUP_TYPE } = ctx();
+    const { text, occurrence } = info;
 
     if (action === 'delete') {
-        await replaceSelection(id, text, occurrence, '');
+        await replaceSelection(id, field, text, occurrence, '');
         return;
     }
 
     // ----- Edit selection: 바꿀 글자를 입력. 같은 글자가 여러 개면 "모두 바꾸기" 체크박스 표시 -----
-    const total = countOccurrences(raw0, text);
+    const total = countOccurrences(getField(id, field), text);
     let replaceAll = false;
     const checkbox = total > 1
         ? `<label class="checkbox_label" style="justify-content:center;margin-top:10px">
                <input type="checkbox" id="mf-replace-all">
-               <span>Replace all ${total} occurrences in this message</span>
+               <span>Replace all ${total} occurrences in this ${sourceLabel}</span>
            </label>`
         : '';
 
     const edited = await callGenericPopup(
         `<h3>Edit selection</h3>
-         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}</div>
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}${field === 'display_text' ? ' · translation only' : ''}</div>
          ${checkbox}`,
         POPUP_TYPE.INPUT,
         text,
@@ -644,16 +780,100 @@ async function showSelectionMenu(mes, info) {
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
     if (replaceAll) {
-        const cur = String(chat[id]?.mes ?? '');
+        const cur = getField(id, field);
         if (!cur.includes(text)) {
             window.toastr?.warning('The message changed; nothing was replaced.');
             return;
         }
-        await setMessageText(id, cur.split(text).join(edited));
+        await setField(id, field, cur.split(text).join(edited));
         window.toastr?.success(`Replaced ${countOccurrences(cur, text)} occurrence(s).`);
     } else {
-        await replaceSelection(id, text, occurrence, edited);
+        await replaceSelection(id, field, text, occurrence, edited);
     }
+}
+
+// 선택 글자 메뉴
+//  1) 번역문(extra.display_text)이 없을 때
+//      - 선택한 글자가 원문에 그대로 있으면 → 기존 방식(정확한 위치 수정/삭제)
+//      - 없으면(마크다운·XML·정규식 등으로 화면이 달라진 경우) → <p> 문단 매칭으로 원문 문단 편집
+//  2) 번역문이 있을 때
+//      - Edit translation: 번역문(display_text)만 수정. mes(프롬프트)는 그대로. 글자가 안 맞으면 번역문 문단 편집
+//      - Edit original: 원문(mes)을 <p> 문단 단위로만 매칭해서 편집. 짝이 안 맞으면 원문 통째 편집
+async function showSelectionMenu(mes, info) {
+    const id = Number(mes.getAttribute('mesid'));
+    if (Number.isNaN(id) || !chat[id]) return;
+
+    const { text } = info;
+    const name = chat[id].name || '';
+    const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+    const translated = hasDisplayText(id);
+
+    const html = `<h3>Selected text</h3>
+        <div style="text-align:left;opacity:.8;margin-top:8px">
+            <b>#${id}</b> ${escapeHtml(name)}${translated ? ' · <i>translated</i>' : ''}<br>“${escapeHtml(preview)}”
+        </div>`;
+
+    const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
+    if (!callGenericPopup || !POPUP_TYPE) return;
+
+    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM1 ?? 1001;
+    const CUSTOM_ORIG = POPUP_RESULT?.CUSTOM2 ?? 1002;
+    const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
+
+    const customButtons = translated
+        ? [{ text: 'Edit translation', result: CUSTOM_EDIT }, { text: 'Edit original', result: CUSTOM_ORIG }]
+        : [{ text: 'Edit', result: CUSTOM_EDIT }];
+
+    const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
+        okButton: translated ? 'Delete (translation)' : 'Delete',
+        cancelButton: 'Cancel',
+        defaultResult: RESULT_CANCEL,
+        customButtons,
+    });
+
+    let action = null;
+    if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
+    else if (result === CUSTOM_EDIT) action = 'edit';
+    else if (translated && result === CUSTOM_ORIG) action = 'original';
+    if (!action) return;
+
+    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
+
+    // 번역문이 있으면: Edit original 만 원문(mes), 나머지(Edit/Delete)는 번역문(display_text)이 대상
+    const field = (translated && action !== 'original') ? 'display_text' : 'mes';
+    const sourceLabel = field === 'display_text' ? 'translation' : 'message';
+
+    // 번역문이 있을 때 원문 수정 → 글자 매칭은 하지 않고 문단 단위로만
+    if (translated && action === 'original') {
+        await editByParagraph(mes, id, 'mes', info, name);
+        return;
+    }
+
+    // 화면 글자가 대상 텍스트에 그대로 있으면 기존 방식
+    if (getField(id, field).includes(text)) {
+        await editExact(mes, id, field, action, info, name, sourceLabel);
+        return;
+    }
+
+    // 줄바꿈/공백만 다른 경우(여러 문단에 걸친 선택): 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
+    {
+        const raw = getField(id, field);
+        const loose = findInRawLoose(raw, text, info.occurrenceC ?? 0);
+        if (loose) {
+            const exact = raw.slice(loose.start, loose.end);
+            let occ = 0;
+            for (let i = raw.indexOf(exact); i !== -1 && i < loose.start; i = raw.indexOf(exact, i + 1)) occ++;
+            await editExact(mes, id, field, action, { ...info, text: exact, occurrence: occ }, name, sourceLabel);
+            return;
+        }
+    }
+
+    // 그대로는 없음 (마크다운/XML/정규식 등으로 화면과 저장 텍스트가 다름) → 문단 매칭 폴백
+    if (action === 'delete') {
+        window.toastr?.warning('Could not locate the exact text. Use Edit to change the whole paragraph instead.');
+        return;
+    }
+    await editByParagraph(mes, id, field, info, name);
 }
 
 // (x, y) 지점에 실제 글자가 있는지 판정 (본문 블록의 빈 공간은 false)
@@ -857,7 +1077,14 @@ function initLongPress(chatEl) {
         mode = selHit ? 'sel' : 'msg';
         const st = settings();
         const touchMs = holdTime(st.holdTouch, 750);
-        holdMs = !isTouch ? holdTime(st.holdMouse, 610) : (selHit ? Math.round(touchMs * 0.8) : touchMs);
+        if (selHit) {
+            // 선택한 글자 위: 터치(holdSelTouch) / 마우스(holdSelMouse) 각각 별도 설정을 사용
+            holdMs = isTouch
+                ? holdTime(st.holdSelTouch, DEFAULTS.holdSelTouch, SEL_HOLD_MIN)
+                : holdTime(st.holdSelMouse, DEFAULTS.holdSelMouse, SEL_HOLD_MIN_MOUSE);
+        } else {
+            holdMs = isTouch ? touchMs : holdTime(st.holdMouse, DEFAULTS.holdMouse);
+        }
 
         pressedMes = mes;
         startX = e.clientX;
@@ -913,7 +1140,7 @@ function initLongPress(chatEl) {
     // 길게 누른 직후 발생하는 click / contextmenu 차단
     // (캡처 단계에서 막으므로 접힌 바가 임시로 펼쳐지는 일도 없음)
     chatEl.addEventListener('click', (e) => {
-        if (fired) { e.preventDefault(); e.stopPropagation(); fired = false; }
+        if (fired && e.isTrusted) { e.preventDefault(); e.stopPropagation(); fired = false; }
     }, true);
     chatEl.addEventListener('contextmenu', (e) => {
         if (timer || fired) e.preventDefault();
@@ -1013,7 +1240,7 @@ function initSettingsPanel() {
                         <div class="mf-head">Target messages</div>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="none">
-                            <span><span class="mf-radio-title">None</span><small class="mf-desc">Don't auto-fold or auto-hide anything. The toggles below are turned off and locked.</small></span>
+                            <span><span class="mf-radio-title">None</span></span>
                         </label>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="comment">
@@ -1025,7 +1252,7 @@ function initSettingsPanel() {
                         </label>
                         <label class="mf-radio">
                             <input type="radio" name="mf_auto_scope" value="every">
-                            <span><span class="mf-radio-title">All messages</span><small class="mf-desc">Every new message, including your own.</small></span>
+                            <span><span class="mf-radio-title">All messages</span></span>
                         </label>
                     </div>
                     <div class="mf-item mf-auto-toggle">
@@ -1044,9 +1271,10 @@ function initSettingsPanel() {
                     </div>
                     <small class="mf-desc mf-hint">Click to expand: auto-fold or hide new messages.</small>
                 </fieldset>
-                <fieldset class="mf-box">
+                <fieldset class="mf-box mf-compact">
                     <legend><i class="fa-solid fa-hand-pointer"></i>Delete &amp; Edit</legend>
                     <div class="mf-item">
+                    <div class="mf-head" style="margin-bottom: 6px;">Activate / Inactivate</div>
                         <label class="mf-opt" for="mf_long_press_menu">
                             <span class="mf-opt-title">Long-press message menu</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_long_press_menu"><span class="mf-slider"></span></span>
@@ -1063,7 +1291,10 @@ function initSettingsPanel() {
                     <div class="mf-item">
                         <div class="mf-head mf-head-row">
                             <span>Hold time</span>
-                            <button type="button" class="mf-reset" id="mf_hold_reset" title="Reset hold time to default" aria-label="Reset hold time to default"><i class="fa-solid fa-rotate-left"></i></button>
+                            <span class="mf-head-btns">
+                                <button type="button" class="mf-reset" id="mf_hold_save" title="Save current hold time" aria-label="Save current hold time"><i class="fa-solid fa-floppy-disk"></i></button>
+                                <button type="button" class="mf-reset" id="mf_hold_reset" title="Reset hold time to saved value (or default)" aria-label="Reset hold time to saved value (or default)"><i class="fa-solid fa-rotate-left"></i></button>
+                            </span>
                         </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
@@ -1075,7 +1306,27 @@ function initSettingsPanel() {
                             <input type="range" id="mf_hold_touch" min="500" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_touch_val"></span>
                         </label>
-                        <small class="mf-desc">How long to press before the popup appears. Longer values help avoid accidental popups.</small>
+                        <small class="mf-desc">How long to press before the message popup appears. Longer values help avoid accidental popups.</small>
+                    </div>
+                    <div class="mf-item">
+                        <div class="mf-head mf-head-row">
+                            <span>Text selection hold time</span>
+                            <span class="mf-head-btns">
+                                <button type="button" class="mf-reset" id="mf_hold_sel_save" title="Save current text selection hold time" aria-label="Save current text selection hold time"><i class="fa-solid fa-floppy-disk"></i></button>
+                                <button type="button" class="mf-reset" id="mf_hold_sel_reset" title="Reset text selection hold time to saved value (or default)" aria-label="Reset text selection hold time to saved value (or default)"><i class="fa-solid fa-rotate-left"></i></button>
+                            </span>
+                        </div>
+                        <label class="mf-range">
+                            <span class="mf-range-name">Mouse</span>
+                            <input type="range" id="mf_hold_sel_mouse" min="10" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_sel_mouse_val"></span>
+                        </label>
+                        <label class="mf-range">
+                            <span class="mf-range-name">Touch</span>
+                            <input type="range" id="mf_hold_sel_touch" min="200" max="1000" step="10">
+                            <span class="mf-range-val" id="mf_hold_sel_touch_val"></span>
+                        </label>
+                        <small class="mf-desc">How long to press selected text before the Edit / Delete popup appears. Mouse: lower it to open the popup right after you drag-select and click the selection. Touch: if your device starts dragging the text first (e.g. Android), lower this.</small>
                     </div>
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
@@ -1125,11 +1376,11 @@ function initSettingsPanel() {
     bind('mf_selection_menu', 'selectionMenu');
 
     // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
-    const bindRange = (id, key, fallback) => {
+    const bindRange = (id, key, fallback, min = HOLD_MIN) => {
         const el = wrap.querySelector(`#${id}`);
         const val = wrap.querySelector(`#${id}_val`);
         const show = () => { val.textContent = `${el.value} ms`; };
-        el.value = holdTime(settings()[key], fallback);
+        el.value = holdTime(settings()[key], fallback, min);
         show();
         const save = () => {
             settings()[key] = Number(el.value);
@@ -1145,15 +1396,36 @@ function initSettingsPanel() {
         { ...bindRange('mf_hold_touch', 'holdTouch', DEFAULTS.holdTouch), key: 'holdTouch' },
     ];
 
-    // 길게 누르기 시간 기본값으로 되돌리기
-    wrap.querySelector('#mf_hold_reset').addEventListener('click', () => {
-        for (const { el, show, key } of holdSliders) {
-            el.value = DEFAULTS[key];
-            settings()[key] = DEFAULTS[key];
-            show();
-        }
-        ctx().saveSettingsDebounced();
-    });
+    const holdSelSliders = [
+        { ...bindRange('mf_hold_sel_mouse', 'holdSelMouse', DEFAULTS.holdSelMouse, SEL_HOLD_MIN_MOUSE), key: 'holdSelMouse', min: SEL_HOLD_MIN_MOUSE },
+        { ...bindRange('mf_hold_sel_touch', 'holdSelTouch', DEFAULTS.holdSelTouch, SEL_HOLD_MIN), key: 'holdSelTouch' },
+    ];
+
+    // 길게 누르기 시간 저장 / 초기화 (메시지용 / 선택 글자용 각각)
+    //  - 저장 버튼: 현재 슬라이더 값(마우스/터치)을 savedKey 에 보관
+    //  - 초기화 버튼: 저장해 둔 값이 있으면 그 값으로, 없으면 기본값으로 되돌림
+    const bindHoldButtons = (saveId, resetId, sliders, savedKey, label, min) => {
+        // (슬라이더마다 최소값이 다를 수 있음: 각 슬라이더의 min 이 있으면 우선 사용)
+        wrap.querySelector(`#${saveId}`).addEventListener('click', () => {
+            const st = settings();
+            st[savedKey] = {};
+            for (const { el, key } of sliders) st[savedKey][key] = Number(el.value);
+            ctx().saveSettingsDebounced();
+            window.toastr?.success(`${label} saved.`);
+        });
+        wrap.querySelector(`#${resetId}`).addEventListener('click', () => {
+            const st = settings();
+            for (const { el, show, key, min: m } of sliders) {
+                const v = holdTime(st[savedKey]?.[key], DEFAULTS[key], m ?? min);
+                el.value = v;
+                st[key] = v;
+                show();
+            }
+            ctx().saveSettingsDebounced();
+        });
+    };
+    bindHoldButtons('mf_hold_save', 'mf_hold_reset', holdSliders, 'holdSaved', 'Hold time', HOLD_MIN);
+    bindHoldButtons('mf_hold_sel_save', 'mf_hold_sel_reset', holdSelSliders, 'holdSelSaved', 'Text selection hold time', SEL_HOLD_MIN);
 
     // 접이식 박스 (옵시디언 콜아웃처럼 기본은 접힘): 제목 또는 안내 문구를 누르면 펼침/접힘
     for (const box of wrap.querySelectorAll('.mf-collapsible')) {
@@ -1268,6 +1540,7 @@ jQuery(() => {
 
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
     // 자동 접기/숨기기 기준선: 채팅을 열 때 기존 메시지 수로 갱신, 삭제로 줄어들면 같이 낮춤
+    // 클로드가 달아준 주석들 왠지 지우면 안 될 것 같군 ㅋㅋ 너도 내 주석 지우지 마 클로드야 
     syncBaseline();
     if (event_types.CHAT_CHANGED) eventSource.on(event_types.CHAT_CHANGED, syncBaseline);
     if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, () => { autoBaseline = Math.min(autoBaseline, chat.length); });
