@@ -69,8 +69,7 @@ function settings() {
 }
 
 // Hide & Fold 연동 모드: null(끔) | 'keep'(Fold 버튼 유지) | 'replace'(Fold 버튼을 Hide 에 합침)
-function linkMode() {
-    const st = settings();
+function linkMode(st = settings()) {
     if (!st.linkHideFold) return null;
     return st.linkMode === 'keep' ? 'keep' : 'replace';
 }
@@ -200,13 +199,13 @@ function ensureBar(ph, id) {
 const setDisplay = (el, v) => { if (el.style.display !== v) el.style.display = v; };
 
 // 메시지 하나의 접힘 표시를 갱신. 클래스 토글이 전부라서 매우 가볍다.
-function render(mes) {
+function render(mes, st = settings()) {
     const id = Number(mes.getAttribute('mesid'));
     const folded = isFolded(id);                 // 저장된 접힘 상태
     const collapsed = folded && openId !== id;   // 실제로 접혀 보이는지 (임시로 펼친 경우 제외)
 
-    const unseen = settings().tintUnseen && folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태 (색 덧입힘 설정이 켜져 있을 때만)
-    const replaceFold = linkMode() === 'replace';                // Fold 대체 모드면 별도 fold 아이콘은 숨김
+    const unseen = st.tintUnseen && folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태 (색 덧입힘 설정이 켜져 있을 때만)
+    const replaceFold = linkMode(st) === 'replace';              // Fold 대체 모드면 별도 fold 아이콘은 숨김
 
     mes.classList.toggle('mf-folded', collapsed);
     mes.classList.toggle('mf-pinned', folded);
@@ -240,7 +239,7 @@ function renderById(id) {
     if (mes) render(mes);
 }
 
-function decorate(mes) {
+function decorate(mes, st = settings()) {
     const id = Number(mes.getAttribute('mesid'));
     if (Number.isNaN(id) || !chat[id]) return;
 
@@ -272,7 +271,7 @@ function decorate(mes) {
         (mes.querySelector('.mes_block') ?? mes).append(ph);
     }
 
-    render(mes);
+    render(mes, st);
 }
 
 // 슬래시 명령어로 만든 메시지(/comment, /sendas 등)를 자동으로 접고 / 숨김 (메시지마다 각각 딱 한 번만)
@@ -314,7 +313,8 @@ function autoProcessComments() {
 
 function refreshAll() {
     autoProcessComments();
-    document.querySelectorAll('#chat .mes').forEach(decorate);
+    const st = settings();   // 메시지마다 읽지 않고 한 번만 읽어서 전달
+    document.querySelectorAll('#chat .mes').forEach((mes) => decorate(mes, st));
 }
 
 let scheduled = false;
