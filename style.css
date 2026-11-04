@@ -137,6 +137,29 @@
     -webkit-touch-callout: none;
 }
 
+/* ===== fold / unfold 액션 아이콘 표시 규칙 =====
+   (예전에는 JS 가 메시지마다 style.display 를 썼지만, 이제는 클래스만 보고 CSS 가 결정)
+   - .mf-pinned        : 저장된 접힘 상태인 메시지 (임시로 펼친 것도 포함)
+   - #chat.mf-replace  : Hide & Fold 연동 + "Fold 버튼 대체" 모드 (별도 fold/unfold 아이콘을 숨김)
+   인라인 style 과 같은 힘을 내도록 !important 사용 (테마가 .mes_button 의 display 를 정해 둔 경우 대비) */
+#chat .mes.mf-pinned .mes_fold,
+#chat .mes:not(.mf-pinned) .mes_unfold,
+#chat.mf-replace .mes_fold,
+#chat.mf-replace .mes_unfold {
+    display: none !important;
+}
+
+/* ===== 화면 밖 메시지 렌더링 생략 (패널의 "Skip off-screen messages" 를 켰을 때만 #chat.mf-cv 가 붙음) =====
+   화면 밖 메시지는 브라우저가 레이아웃/그리기를 건너뛰어 아주 긴 채팅에서 부드러워질 수 있음.
+   주의: 이 속성은 paint containment 를 포함해서 메시지 박스 밖으로 삐져나오는 테마 장식이 잘릴 수 있고,
+   화면 밖 메시지 높이를 추정값으로 쓰기 때문에 스크롤바가 튈 수 있음. 어색하면 패널에서 끄면 됨.
+   접힌 메시지는 위쪽 규칙(content-visibility: visible !important)이 그대로 우선함.
+   추정 높이를 바꾸려면 Custom CSS 에 :root { --mf-cv-height: 300px; } */
+#chat.mf-cv .mes:not(.mf-folded) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto var(--mf-cv-height, 200px);
+}
+
 /* ===== Long press 시각 피드백 (팝업 직전에만, 서서히 진해짐) ===== */
 #chat .mes.lpd-pressing {
     animation: lpd-hold var(--lpd-hold, 250ms) linear forwards;
