@@ -48,7 +48,6 @@ const DEFAULTS = {
     tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
     closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
     batchFold: false,       // /fold, /unfold 를 "데이터 먼저 수정 → 화면은 한 번만 갱신" 방식으로 처리 (메시지가 아주 많을 때 유용)
-    lazyRender: false,      // 화면 밖 메시지의 렌더링 생략 (CSS content-visibility). 아주 긴 채팅에서 부드러워질 수 있지만 테마에 따라 어색할 수 있어 기본 꺼짐
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
@@ -326,11 +325,9 @@ function autoProcessComments(st) {
 
 // 설정에 따라 #chat 에 붙는 클래스 (실제 모양 규칙은 style.css 가 처리)
 //  - mf-replace : Hide & Fold 연동 + Fold 버튼 대체 모드 → 별도 fold/unfold 아이콘을 숨김
-//  - mf-cv      : 화면 밖 메시지의 렌더링 생략(content-visibility) 사용
 function syncChatClasses(st = settings()) {
     if (!chatEl) return;
     chatEl.classList.toggle('mf-replace', linkMode(st) === 'replace');
-    chatEl.classList.toggle('mf-cv', !!st.lazyRender);
 }
 
 // ===== 갱신 스케줄러 =====
@@ -1444,14 +1441,7 @@ function initSettingsPanel() {
                         </label>
                         <small class="mf-desc">Updates all the data first, then redraws the screen only once. Useful when hundreds of messages have piled up and /fold or /unfold takes a long time.</small>
                     </div>
-                    <div class="mf-item">
-                        <label class="mf-opt" for="mf_lazy_render">
-                            <span class="mf-opt-title">Skip off-screen messages</span>
-                            <span class="mf-switch"><input type="checkbox" id="mf_lazy_render"><span class="mf-slider"></span></span>
-                        </label>
-                        <small class="mf-desc">Lets the browser skip drawing messages that are scrolled out of view. Can make very long chats smoother, but may make the scrollbar jump or clip theme decorations. Turn it off if anything looks odd.</small>
-                    </div>
-                    <small class="mf-desc mf-hint">Click to expand: unread tint, closing an expanded message, batch /fold, and off-screen skipping.</small>
+                    <small class="mf-desc mf-hint">Click to expand: unread tint, closing an expanded message, and batch /fold.</small>
                 </fieldset>
             </div>
         </div>`;
@@ -1477,7 +1467,6 @@ function initSettingsPanel() {
     bind('mf_auto_hide_comments', 'autoHideComments');
     bind('mf_tint_unseen', 'tintUnseen');
     bind('mf_batch_fold', 'batchFold');
-    bind('mf_lazy_render', 'lazyRender');
     bind('mf_long_press_menu', 'longPressMenu');
     bind('mf_selection_menu', 'selectionMenu');
 
@@ -1702,7 +1691,7 @@ function init() {
         dirtyIds.clear();
         dirtyEls.clear();
         if (chatEl) {
-            chatEl.classList.remove('mf-replace', 'mf-cv');
+            chatEl.classList.remove('mf-replace');
             chatEl.querySelectorAll('.mf-placeholder, .mes_fold, .mes_unfold').forEach((el) => el.remove());
             chatEl.querySelectorAll('.mes').forEach((m) => m.classList.remove('mf-folded', 'mf-pinned', 'mf-unseen', 'lpd-pressing', 'lpd-touch', 'lpd-nosel'));
         }
