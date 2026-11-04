@@ -45,6 +45,7 @@ const DEFAULTS = {
     autoScope: 'none',      // 자동 접기/숨기기 대상: 'none'(사용 안 함) | 'comment'(슬래시 명령어 메시지만) | 'all'(유저가 아닌 모든 메시지) | 'every'(유저 메시지 포함 전부)
     tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
     closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
+    batchFold: false,       // /fold, /unfold 를 "데이터 먼저 수정 → 화면은 한 번만 갱신" 방식으로 처리 (메시지가 아주 많을 때 유용)
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
@@ -116,7 +117,7 @@ const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 // 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
 // 선택한 글자 위 길게 누르기 시간은 settings().holdSelTouch(터치) / settings().holdSelMouse(마우스) 로 따로 조절.
 // 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
-const HOLD_MIN = 500;
+const HOLD_MIN = 400;
 const SEL_HOLD_MIN = 200;
 const SEL_HOLD_MIN_MOUSE = 10;   // 마우스는 드래그 직후 바로 클릭해도 뜨도록 더 낮게 허용
 const HOLD_MAX = 1000;
@@ -369,8 +370,8 @@ function flushRefresh() {
     for (const mes of els) if (mes.isConnected) decorate(mes, st);
 }
 
-// 저장 상태만 바꿈 (저장 호출은 호출한 쪽에서). 실제로 바뀌었으면 true
-function setFold(id, value) {
+// 데이터(저장 상태)만 바꿈. 화면은 건드리지 않음. 실제로 바뀌었으면 true
+function setFoldData(id, value) {
     const msg = chat[id];
     if (!msg) return false;
     if (isFolded(id) === value) return false;
@@ -383,10 +384,14 @@ function setFold(id, value) {
         delete msg.extra[UNSEEN_KEY];   // 접기 해제하면 색 덧입힘도 같이 제거
     }
     if (openId === id) openId = null;
-
-    const mes = mesById(id);
-    if (mes) render(mes);
     return true;
+}
+
+// 데이터 변경 + 그 메시지 하나만 바로 화면 갱신 (저장 호출은 호출한 쪽에서). 실제로 바뀌었으면 true
+function setFold(id, value) {
+    const changed = setFoldData(id, value);
+    if (changed) renderById(id);
+    return changed;
 }
 
 // 접기 설정 / 해제 (저장 상태 변경) - 액션 아이콘 & 길게 누르기 팝업 공용
@@ -1238,7 +1243,13 @@ async function foldCommand(value, fold) {
         return '';
     }
     let changed = false;
-    for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
+    if (settings().batchFold) {
+        // 일괄 모드: 데이터만 쭉 수정하고, 화면 갱신은 한 번만 예약 (메시지마다 요소를 찾지 않음)
+        for (let i = range.start; i <= range.end; i++) changed = setFoldData(i, fold) || changed;
+        if (changed) scheduleRefresh();
+    } else {
+        for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
+    }
     if (changed) await saveChatConditional();
     return '';
 }
@@ -1369,12 +1380,12 @@ function initSettingsPanel() {
                         </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
-                            <input type="range" id="mf_hold_mouse" min="500" max="1000" step="10">
+                            <input type="range" id="mf_hold_mouse" min="400" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_mouse_val"></span>
                         </label>
                         <label class="mf-range">
                             <span class="mf-range-name">Touch</span>
-                            <input type="range" id="mf_hold_touch" min="500" max="1000" step="10">
+                            <input type="range" id="mf_hold_touch" min="400" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_touch_val"></span>
                         </label>
                         <small class="mf-desc">How long to press before the message popup appears. Longer values help avoid accidental popups.</small>
@@ -1420,7 +1431,14 @@ function initSettingsPanel() {
                             <span><span class="mf-radio-title">Double-click the message</span><small class="mf-desc">Double-click (double-tap on mobile) the expanded message to fold it again. Clicking elsewhere does nothing.</small></span>
                         </label>
                     </div>
-                    <small class="mf-desc mf-hint">Click to expand: unread tint and how to close an expanded message.</small>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_batch_fold">
+                            <span class="mf-opt-title">Batch /fold &amp; /unfold</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_batch_fold"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Updates all the data first, then redraws the screen only once. Useful when hundreds of messages have piled up and /fold or /unfold takes a long time.</small>
+                    </div>
+                    <small class="mf-desc mf-hint">Click to expand: unread tint, closing an expanded message, and batch /fold.</small>
                 </fieldset>
             </div>
         </div>`;
@@ -1445,6 +1463,7 @@ function initSettingsPanel() {
     bind('mf_auto_fold_comments', 'autoFoldComments');
     bind('mf_auto_hide_comments', 'autoHideComments');
     bind('mf_tint_unseen', 'tintUnseen');
+    bind('mf_batch_fold', 'batchFold');
     bind('mf_long_press_menu', 'longPressMenu');
     bind('mf_selection_menu', 'selectionMenu');
 
@@ -1639,7 +1658,6 @@ function init() {
     hideObserver.observe(chatEl, { subtree: true, attributes: true, attributeFilter: ['is_system'], attributeOldValue: true });
     onDispose(() => hideObserver.disconnect());
 
-    // 클로드가 달아준 주석들 왠지 지우면 안 될 것 같군 ㅋㅋ 너도 내 주석 지우지 마 클로드야
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
     // 자동 접기/숨기기 기준선: 채팅을 열 때 기존 메시지 수로 갱신, 삭제로 줄어들면 같이 낮춤
     syncBaseline();
