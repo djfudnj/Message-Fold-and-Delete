@@ -514,6 +514,13 @@ const hasSelection = () => {
 
 const SEL_HIT_PAD = 4;
 
+// 느슨한 매칭에서 양쪽 모두 무시할 문자: 공백(줄바꿈 포함) + 마크다운 짝 기호(* _ ~ ` \)
+// (화면에는 기호가 없고 저장 텍스트에는 있는 경우를 맞추기 위함. 화면 글자와 저장 텍스트에 같은 필터를 쓰므로 일관됨)
+const LOOSE_SKIP_ONE = /[\s*_~`\\]/;
+const LOOSE_SKIP_ALL = /[\s*_~`\\]+/g;
+const squashLoose = (t) => t.replace(LOOSE_SKIP_ALL, '');
+const mdCount = (t) => (t.match(/[*_~`\\]/g) || []).length;   // 마크다운 기호 개수 (삭제 가드용)
+
 // 현재 선택이 "한 메시지의 본문(.mes_text) 안"에 있을 때만 정보를 돌려줌
 function getSelectionInfo() {
     const sel = window.getSelection();
@@ -543,9 +550,10 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    // 공백을 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지 (여러 문단에 걸친 선택은 문단 사이 줄바꿈이
-    // 화면 글자(range.toString)와 저장 텍스트에서 서로 달라서, 공백을 무시하고 위치를 찾기 위함)
-    const squash = (t) => t.replace(/\s+/g, '');
+    // 공백과 마크다운 기호를 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지
+    // (여러 문단에 걸친 선택은 줄바꿈이, 서식이 있는 글은 * _ ~ 같은 기호가 화면 글자와 저장 텍스트에서 서로 달라서,
+    //  이들을 무시하고 위치를 찾기 위함)
+    const squash = squashLoose;
     const fullC = squash(full), textC = squash(text), preC = squash(preStr).length;
     let occurrenceC = 0;
     for (let i = textC ? fullC.indexOf(textC) : -1; i !== -1 && i < preC; i = fullC.indexOf(textC, i + 1)) occurrenceC++;
@@ -598,14 +606,17 @@ function findInRaw(raw, text, occurrence) {
     return start === undefined ? null : { start, end: start + text.length };
 }
 
-// 공백(줄바꿈 포함) 차이를 무시하고 찾기: 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고
-// 저장 텍스트에는 "\n\n" 이 있어서 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+// 공백(줄바꿈 포함)과 마크다운 기호(* _ ~ ` \)를 무시하고 찾기:
+//  - 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고 저장 텍스트에는 "\n\n" 이 있음
+//  - 서식이 있으면 화면에는 없는 * _ ~ 같은 기호가 저장 텍스트에는 끼어 있음
+// 둘 다 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+// (구간의 양 끝에는 무시한 문자가 포함되지 않으므로, 선택 경계의 여는/닫는 기호는 건드리지 않음)
 function findInRawLoose(raw, text, occurrence) {
-    const want = text.replace(/\s+/g, '');
+    const want = squashLoose(text);
     if (!want) return null;
     const chars = [], map = [];
     for (let i = 0; i < raw.length; i++) {
-        if (/\s/.test(raw[i])) continue;
+        if (LOOSE_SKIP_ONE.test(raw[i])) continue;
         chars.push(raw[i]);
         map.push(i);
     }
@@ -915,12 +926,17 @@ async function showSelectionMenu(mes, info) {
         return;
     }
 
-    // 줄바꿈/공백만 다른 경우(여러 문단에 걸친 선택): 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
+    // 줄바꿈/공백/마크다운 기호(* _ ~ 등)만 다른 경우: 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
     {
         const raw = getField(id, field);
         const loose = findInRawLoose(raw, text, info.occurrenceC ?? 0);
         if (loose) {
             const exact = raw.slice(loose.start, loose.end);
+            // 삭제인데 구간 안에 (선택에는 없던) 마크다운 기호가 끼어 있으면 짝이 깨질 수 있어서 막음
+            if (action === 'delete' && mdCount(exact) > mdCount(text)) {
+                window.toastr?.warning('The selection includes markdown symbols (* _ ~ etc.). Use Edit instead so the formatting is not broken.');
+                return;
+            }
             let occ = 0;
             for (let i = raw.indexOf(exact); i !== -1 && i < loose.start; i = raw.indexOf(exact, i + 1)) occ++;
             await editExact(mes, id, field, action, { ...info, text: exact, occurrence: occ }, name, sourceLabel);
