@@ -137,6 +137,18 @@
     -webkit-touch-callout: none;
 }
 
+/* ===== fold / unfold 액션 아이콘 표시 규칙 =====
+   (예전에는 JS 가 메시지마다 style.display 를 썼지만, 이제는 클래스만 보고 CSS 가 결정)
+   - .mf-pinned        : 저장된 접힘 상태인 메시지 (임시로 펼친 것도 포함)
+   - #chat.mf-replace  : Hide & Fold 연동 + "Fold 버튼 대체" 모드 (별도 fold/unfold 아이콘을 숨김)
+   인라인 style 과 같은 힘을 내도록 !important 사용 (테마가 .mes_button 의 display 를 정해 둔 경우 대비) */
+#chat .mes.mf-pinned .mes_fold,
+#chat .mes:not(.mf-pinned) .mes_unfold,
+#chat.mf-replace .mes_fold,
+#chat.mf-replace .mes_unfold {
+    display: none !important;
+}
+
 /* ===== Long press 시각 피드백 (팝업 직전에만, 서서히 진해짐) ===== */
 #chat .mes.lpd-pressing {
     animation: lpd-hold var(--lpd-hold, 250ms) linear forwards;
