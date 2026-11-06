@@ -1,29 +1,12 @@
 // Message Fold (Persistent) + Long Press Menu
-// 메시지 객체의 extra.folded 값(true/없음)으로 접힘 상태를 저장합니다.
-// is_system 처럼 chat.jsonl 에 함께 저장되므로 기기/브라우저가 달라도 유지됩니다.
-//
-// 동작:
-//  - 접힌(저장된) 메시지의 바를 누르면 "임시로" 펼쳐집니다. (저장 상태는 변하지 않음)
-//  - 펼쳐진 메시지 안을 누르면 그대로 유지, 다른 메시지/빈 곳을 누르면 다시 접힙니다.
-//  - 저장된 접힘 상태는 메시지 액션의 아이콘(접기 설정 ↔ 접기 해제)으로 바뀝니다.
-//  - 메시지(접힌 바 포함)를 길게 누르면 팝업이 뜨고 Hide(Unhide) / Delete / Fold(Unfold) / Cancel 을 고를 수 있습니다.
-//  - 글자를 드래그로 선택한 뒤, 손을 떼고 선택된 글자 위를 다시 길게 누르면
-//    Edit selection / Delete selection 팝업이 뜹니다. (모바일: 선택 후 뜨는 복사/모두 선택 툴바 상태에서 선택된 글자를 더 길게 누르기)
-//  - Edit selection 에서 같은 글자가 여러 개면 "모두 바꾸기" 체크박스로 한 번에 교체할 수 있습니다.
-//  - 선택한 글자가 저장된 텍스트에 그대로 없으면(마크다운/XML/정규식 등으로 화면이 달라진 경우)
-//    SillyTavern 본체의 messageFormatting 으로 <p> 문단을 맞춰서 해당 문단을 통째로 편집합니다. (실패하면 메시지 통째 편집)
-//  - 번역문(extra.display_text)이 있는 메시지는 Edit translation(번역문만 수정, 원문 mes 는 안 바뀜) /
-//    Edit original(원문을 <p> 문단 단위로만 매칭해서 수정) 중에 고를 수 있습니다.
-//  - 빨간 테두리 피드백은 터치(모바일)에서만 나타납니다.
-//  - /fold, /unfold 슬래시 명령어 (/hide 처럼 인덱스 또는 범위: /fold 3, /fold 2-5, /fold 4-)
-//  - 확장 패널 옵션
-//      · 길게 누르기 메시지 메뉴 / 선택 글자 편집·삭제 메뉴 각각 on/off, 누르는 시간(마우스/터치) 조절
-//        (선택 글자 메뉴는 마우스/터치 각각 별도의 누르는 시간 설정을 가짐, 터치 최소 200ms / 마우스 최소 10ms)
-//      · 자동 접기/숨기기 대상 선택: 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
-//      · 안 읽은 접힘 바 색 덧입힘 on/off (기본 on)
-//      · 펼친 메시지 닫는 방법: 다른 곳 클릭 / 그 메시지 더블클릭(더블탭)
-//      · Hide & Fold 연동: hide 하면 자동 fold, unhide 하면 자동 unfold (팝업 버튼도 하나로 합쳐짐)
-//      · 슬래시 명령어로 만든 메시지(/sendas, /comment 등, extra.model='slash command') 자동 접기 (아직 안 눌렀으면 인용문 색을 20% 덧입힘)
+// 구현 메모 (정리/성능):
+//  - 모든 DOM 리스너는 AbortController 하나로, 옵저버/이벤트 구독/타이머는 disposer 목록으로 묶어서
+//    destroy() 한 번에 해제됩니다. (확장이 다시 로드돼도 이전 인스턴스를 먼저 정리)
+//  - 갱신은 requestAnimationFrame 으로 한 프레임에 모아서 처리하고, 바뀐 메시지만 다시 그립니다. (전체 갱신은 채팅 전환/삭제 등 꼭 필요할 때만)
+//  - DOM 쓰기(클래스/스타일)와 레이아웃 읽기(getBoundingClientRect 등)가 섞이지 않게 하고,
+//    자주 호출되는 곳(settings, 미리보기 만들기, 좌표로 메시지 찾기)의 불필요한 비용을 줄였습니다.
+//  - fold/unfold 아이콘의 표시/숨김은 JS 가 메시지마다 style 을 쓰지 않고, #chat 의 클래스 하나(mf-replace)와
+//    메시지의 mf-pinned 클래스를 보고 style.css 가 결정합니다.
 
 import { chat, eventSource, event_types, saveChatConditional, updateMessageBlock } from '../../../../script.js';
 
@@ -35,6 +18,25 @@ const COMMENT_TYPE = 'comment';   // /comment 등으로 만든 메시지의 extr
 
 // 미확인(자동 접힘 후 아직 안 눌러본) 바의 인용문 색 덧입힘은 style.css 의 .mf-unseen 규칙에서 처리
 
+// ===== 정리(cleanup) 관리 =====
+// 이 확장이 만든 구독/옵저버/DOM 을 한 곳에서 해제하기 위한 목록
+let disposers = [];
+const onDispose = (fn) => { disposers.push(fn); };
+let ac = null;        // 모든 DOM 리스너가 공유하는 AbortController
+let chatEl = null;    // #chat (init 에서 한 번만 찾아서 재사용)
+
+function destroy() {
+    ac?.abort();
+    ac = null;
+    const list = disposers;
+    disposers = [];
+    for (const fn of list.reverse()) {
+        try { fn(); } catch (e) { console.warn('[Message Fold] dispose failed', e); }
+    }
+    chatEl = null;
+    openId = null;
+}
+
 // ===== 확장 설정 (확장 패널) =====
 const MODULE = 'message_fold_ext';
 const DEFAULTS = {
@@ -45,6 +47,7 @@ const DEFAULTS = {
     autoScope: 'none',      // 자동 접기/숨기기 대상: 'none'(사용 안 함) | 'comment'(슬래시 명령어 메시지만) | 'all'(유저가 아닌 모든 메시지) | 'every'(유저 메시지 포함 전부)
     tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
     closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
+    batchFold: false,       // /fold, /unfold 를 "데이터 먼저 수정 → 화면은 한 번만 갱신" 방식으로 처리 (메시지가 아주 많을 때 유용)
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
@@ -55,15 +58,22 @@ const DEFAULTS = {
     holdSelSaved: null,     // 텍스트 선택 (터치 + 마우스) 저장
 };
 
+// settings() 는 렌더/포인터 이벤트마다 불리는 핫패스라서
+// getContext()(호출할 때마다 큰 객체를 새로 만듦)를 매번 부르지 않고 루트 참조만 캐시한다.
+// 기본값 채우기도 설정 객체당 한 번만 한다.
+let settingsRoot = null;
+const settingsReady = new WeakSet();
 function settings() {
-    const { extensionSettings } = SillyTavern.getContext();
-    extensionSettings[MODULE] ??= {};
-    for (const [k, v] of Object.entries(DEFAULTS)) extensionSettings[MODULE][k] ??= v;
-    const st = extensionSettings[MODULE];
-    // 대상이 'none' 이면 자동 접기/숨기기는 항상 꺼진 상태로 유지
-    if (st.autoScope === 'none') {
-        st.autoFoldComments = false;
-        st.autoHideComments = false;
+    settingsRoot ??= SillyTavern.getContext().extensionSettings;
+    const st = (settingsRoot[MODULE] ??= {});
+    if (!settingsReady.has(st)) {
+        for (const [k, v] of Object.entries(DEFAULTS)) st[k] ??= v;
+        // 대상이 'none' 이면 자동 접기/숨기기는 항상 꺼진 상태로 유지
+        if (st.autoScope === 'none') {
+            st.autoFoldComments = false;
+            st.autoHideComments = false;
+        }
+        settingsReady.add(st);
     }
     return st;
 }
@@ -86,9 +96,9 @@ const isSlashMade = (msg) => !!msg && !msg.is_user && !!msg.extra
 // 이미 있던 메시지는 건드리지 않고, 채팅을 연 시점 이후(id >= autoBaseline)에 생성된 메시지만 대상으로 함
 let autoBaseline = Infinity;
 const syncBaseline = () => { autoBaseline = chat.length; };
-const isAutoTarget = (msg, id) => {
+const isAutoTarget = (msg, id, scope) => {
     if (!msg || id < autoBaseline) return false;
-    switch (settings().autoScope) {
+    switch (scope) {
         case 'every': return true;             // 유저 메시지 포함 전부
         case 'all': return !msg.is_user;       // 유저가 아닌 모든 메시지
         case 'comment': return isSlashMade(msg); // 슬래시 명령어 메시지만
@@ -109,7 +119,7 @@ const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 // 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
 // 선택한 글자 위 길게 누르기 시간은 settings().holdSelTouch(터치) / settings().holdSelMouse(마우스) 로 따로 조절.
 // 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
-const HOLD_MIN = 500;
+const HOLD_MIN = 400;
 const SEL_HOLD_MIN = 200;
 const SEL_HOLD_MIN_MOUSE = 10;   // 마우스는 드래그 직후 바로 클릭해도 뜨도록 더 낮게 허용
 const HOLD_MAX = 1000;
@@ -149,9 +159,14 @@ let openId = null;
 
 const isFolded = (id) => !!chat[id]?.extra?.[KEY];
 
+// id 로 메시지 DOM 찾기 (#chat 안에서만 검색)
+const mesById = (id) => chatEl?.querySelector(`.mes[mesid="${id}"]`) ?? null;
+
+// 접힌 바에 보일 한 줄 미리보기. 긴 메시지 전체에 정규식을 돌리지 않도록 앞부분만 잘라서 처리
+const PREVIEW_SCAN = 2000;
 function makePreview(id) {
     const msg = chat[id];
-    const raw = String(msg?.mes ?? '')
+    const raw = String(msg?.mes ?? '').slice(0, PREVIEW_SCAN)
         .replace(/<[^>]*>/g, ' ')
         .replace(/[*_`#>~]/g, '')
         .replace(/\s+/g, ' ')
@@ -195,35 +210,20 @@ function ensureBar(ph, id) {
     ph.replaceChildren(arrow, nm, tx);
 }
 
-// 값이 같으면 건드리지 않음 (불필요한 style 속성 갱신 방지)
-const setDisplay = (el, v) => { if (el.style.display !== v) el.style.display = v; };
-
-// 메시지 하나의 접힘 표시를 갱신. 클래스 토글이 전부라서 매우 가볍다.
+// 메시지 하나의 접힘 표시를 갱신. 클래스 토글이 전부라서 매우 가볍다. (쓰기만 하고 레이아웃은 읽지 않음)
 function render(mes, st = settings()) {
     const id = Number(mes.getAttribute('mesid'));
     const folded = isFolded(id);                 // 저장된 접힘 상태
     const collapsed = folded && openId !== id;   // 실제로 접혀 보이는지 (임시로 펼친 경우 제외)
 
     const unseen = st.tintUnseen && folded && !!chat[id]?.extra?.[UNSEEN_KEY];   // 자동 접힘 후 아직 안 눌러본 상태 (색 덧입힘 설정이 켜져 있을 때만)
-    const replaceFold = linkMode(st) === 'replace';              // Fold 대체 모드면 별도 fold 아이콘은 숨김
 
     mes.classList.toggle('mf-folded', collapsed);
     mes.classList.toggle('mf-pinned', folded);
     mes.classList.toggle('mf-unseen', collapsed && unseen);
 
-    // 액션 아이콘: 저장 상태에 따라 두 버튼 중 하나만 보이게 (hide/unhide 와 같은 방식)
-    const foldBtn = mes.querySelector('.mes_fold');
-    if (foldBtn) {
-        // 예전 버전(아이콘이 번갈아 바뀌던 단일 버튼)에서 남은 클래스 정리
-        foldBtn.classList.remove(ICON_UNSET);
-        foldBtn.classList.add(ICON_SET);
-        if (foldBtn.title !== TITLE_SET) foldBtn.title = TITLE_SET;
-        setDisplay(foldBtn, (folded || replaceFold) ? 'none' : '');
-    }
-    const unfoldBtn = mes.querySelector('.mes_unfold');
-    if (unfoldBtn) {
-        setDisplay(unfoldBtn, (folded && !replaceFold) ? '' : 'none');
-    }
+    // 액션 아이콘(fold / unfold)은 두 버튼 중 하나만 보이는데, 그 규칙은 style.css 가 처리:
+    //  mf-pinned(저장된 접힘) 여부와 #chat.mf-replace(Fold 버튼 대체 모드)만 보고 결정
 
     // 접힌 메시지만 바 내용을 준비 (보이고 숨기는 건 CSS 가 .mf-folded 로 처리)
     if (folded) {
@@ -235,7 +235,7 @@ function render(mes, st = settings()) {
 // id 로 메시지를 찾아 그 메시지만 갱신
 function renderById(id) {
     if (id === null || id === undefined) return;
-    const mes = document.querySelector(`#chat .mes[mesid="${id}"]`);
+    const mes = mesById(id);
     if (mes) render(mes);
 }
 
@@ -262,6 +262,14 @@ function decorate(mes, st = settings()) {
         foldBtn.after(unfoldBtn); // fold 바로 뒤 (같은 자리에서 교체되는 짝)
     }
 
+    // 예전 버전이 남긴 흔적 정리: 번갈아 바뀌던 단일 버튼의 아이콘 클래스, 인라인 display(CSS 규칙을 덮어쓰므로 제거)
+    if (foldBtn) {
+        foldBtn.classList.remove(ICON_UNSET);
+        foldBtn.classList.add(ICON_SET);
+        if (foldBtn.title !== TITLE_SET) foldBtn.title = TITLE_SET;
+    }
+    for (const b of mes.querySelectorAll(FOLD_BTN_SELECTOR)) if (b.style.display) b.style.display = '';
+
     // 접혔을 때 메시지를 대신할 한 줄 바 (.mes_block 안 -> 기존 메시지 블록과 폭 동일)
     if (!mes.querySelector('.mf-placeholder')) {
         const ph = document.createElement('div');
@@ -275,21 +283,24 @@ function decorate(mes, st = settings()) {
 }
 
 // 슬래시 명령어로 만든 메시지(/comment, /sendas 등)를 자동으로 접고 / 숨김 (메시지마다 각각 딱 한 번만)
-function autoProcessComments() {
-    const st = settings();
-    if (st.autoScope === 'none') return;
-    if (!st.autoFoldComments && !st.autoHideComments) return;
+// 기준선(autoBaseline) 이후 메시지만 훑고, 이번에 바뀐 메시지 id 목록을 돌려줌 (그 메시지만 다시 그리기 위해)
+function autoProcessComments(st) {
+    const touched = [];
+    if (st.autoScope === 'none') return touched;
+    if (!st.autoFoldComments && !st.autoHideComments) return touched;
 
     let changed = false;
     const toHide = [];
-    chat.forEach((msg, id) => {
-        if (!isAutoTarget(msg, id)) return;
+    for (let id = autoBaseline; id < chat.length; id++) {
+        const msg = chat[id];
+        if (!isAutoTarget(msg, id, st.autoScope)) continue;
         msg.extra ??= {};
         if (st.autoFoldComments && !msg.extra[AUTO_KEY]) {
             msg.extra[AUTO_KEY] = true;
             msg.extra[KEY] = true;
             msg.extra[UNSEEN_KEY] = true;
             changed = true;
+            touched.push(id);
         }
         if (st.autoHideComments && !msg.extra[AUTO_HIDE_KEY]) {
             msg.extra[AUTO_HIDE_KEY] = true;
@@ -297,7 +308,7 @@ function autoProcessComments() {
             if (!msg.is_system) toHide.push(id);   // (comment 는 원래 is_system 이라 /hide 가 필요 없음)
             else if (st.linkHideFold && !isFolded(id)) setFold(id, true);   // 이미 숨김 상태인 comment 도 연동이 켜져 있으면 같이 접음
         }
-    });
+    }
     if (changed) saveChatConditional();
 
     // 숨김은 SillyTavern 의 /hide 를 그대로 사용 (DOM, 저장 처리를 맡김)
@@ -309,26 +320,61 @@ function autoProcessComments() {
             }
         })();
     }
+    return touched;
 }
 
-function refreshAll() {
-    autoProcessComments();
+// 설정에 따라 #chat 에 붙는 클래스 (실제 모양 규칙은 style.css 가 처리)
+//  - mf-replace : Hide & Fold 연동 + Fold 버튼 대체 모드 → 별도 fold/unfold 아이콘을 숨김
+function syncChatClasses(st = settings()) {
+    if (!chatEl) return;
+    chatEl.classList.toggle('mf-replace', linkMode(st) === 'replace');
+}
+
+// ===== 갱신 스케줄러 =====
+// 요청을 한 프레임에 모아서 처리한다.
+//  - scheduleRefresh()          : 전체 갱신 (채팅 전환, 삭제로 id 가 밀린 경우, 설정 변경)
+//  - scheduleRefresh(숫자 id)   : 그 메시지만
+//  - scheduleRefresh(Element)   : 그 .mes 요소만 (새로 추가된 메시지)
+let rafId = 0;
+let needFull = false;
+let dirtyIds = new Set();
+let dirtyEls = new Set();
+
+function scheduleRefresh(target) {
+    if (target instanceof Element) dirtyEls.add(target);
+    else if (Number.isInteger(target)) dirtyIds.add(target);
+    else needFull = true;   // undefined 이거나 id 가 아닌 인자(CHAT_CHANGED 의 채팅 이름 등)
+    if (rafId) return;
+    rafId = requestAnimationFrame(flushRefresh);
+}
+
+function flushRefresh() {
+    rafId = 0;
+    if (!chatEl) return;
+
+    const full = needFull, ids = dirtyIds, els = dirtyEls;
+    needFull = false;
+    dirtyIds = new Set();
+    dirtyEls = new Set();
+
     const st = settings();   // 메시지마다 읽지 않고 한 번만 읽어서 전달
-    document.querySelectorAll('#chat .mes').forEach((mes) => decorate(mes, st));
+    syncChatClasses(st);     // 설정이 바뀌어도 #chat 클래스 하나만 갱신하면 됨
+    const touched = autoProcessComments(st);
+
+    if (full) {
+        for (const mes of chatEl.querySelectorAll('.mes')) decorate(mes, st);
+        return;
+    }
+    for (const id of touched) ids.add(id);
+    for (const id of ids) {
+        const mes = mesById(id);
+        if (mes) els.add(mes);
+    }
+    for (const mes of els) if (mes.isConnected) decorate(mes, st);
 }
 
-let scheduled = false;
-function scheduleRefresh() {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => {
-        scheduled = false;
-        refreshAll();
-    });
-}
-
-// 저장 상태만 바꿈 (저장 호출은 호출한 쪽에서). 실제로 바뀌었으면 true
-function setFold(id, value) {
+// 데이터(저장 상태)만 바꿈. 화면은 건드리지 않음. 실제로 바뀌었으면 true
+function setFoldData(id, value) {
     const msg = chat[id];
     if (!msg) return false;
     if (isFolded(id) === value) return false;
@@ -341,10 +387,14 @@ function setFold(id, value) {
         delete msg.extra[UNSEEN_KEY];   // 접기 해제하면 색 덧입힘도 같이 제거
     }
     if (openId === id) openId = null;
-
-    const mes = document.querySelector(`#chat .mes[mesid="${id}"]`);
-    if (mes) render(mes);
     return true;
+}
+
+// 데이터 변경 + 그 메시지 하나만 바로 화면 갱신 (저장 호출은 호출한 쪽에서). 실제로 바뀌었으면 true
+function setFold(id, value) {
+    const changed = setFoldData(id, value);
+    if (changed) renderById(id);
+    return changed;
 }
 
 // 접기 설정 / 해제 (저장 상태 변경) - 액션 아이콘 & 길게 누르기 팝업 공용
@@ -440,7 +490,7 @@ function onDocumentClick(e) {
     if (dbl) return;
 
     // 편집 중인 챗은 접지 않음
-    const openMes = document.querySelector(`#chat .mes[mesid="${openId}"]`);
+    const openMes = mesById(openId);
     if (openMes?.querySelector('#curEditTextarea')) return;
 
     // 다른 챗 / 빈 곳 → 다시 접기
@@ -451,19 +501,25 @@ function onDocumentClick(e) {
 
 const ctx = () => SillyTavern.getContext();
 
-// 모든 채팅 스타일(Flat / Bubble / Document)에서 작동
-const styleEnabled = () => true;
-
 const escapeHtml = (t) => t.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
+// 선택 여부 확인. Selection.toString() 은 레이아웃을 계산하므로 쓰지 않고,
+// 레이아웃이 필요 없는 Range.toString() 으로 확인한다.
 const hasSelection = () => {
     const sel = window.getSelection();
-    return !!sel && !sel.isCollapsed && sel.toString().length > 0;
+    return !!sel && !sel.isCollapsed && sel.rangeCount > 0 && sel.getRangeAt(0).toString().length > 0;
 };
 
 // ===================== 선택한 텍스트 길게 누르기 메뉴 =====================
 
 const SEL_HIT_PAD = 4;
+
+// 느슨한 매칭에서 양쪽 모두 무시할 문자: 공백(줄바꿈 포함) + 마크다운 짝 기호(* _ ~ ` \)
+// (화면에는 기호가 없고 저장 텍스트에는 있는 경우를 맞추기 위함. 화면 글자와 저장 텍스트에 같은 필터를 쓰므로 일관됨)
+const LOOSE_SKIP_ONE = /[\s*_~`\\]/;
+const LOOSE_SKIP_ALL = /[\s*_~`\\]+/g;
+const squashLoose = (t) => t.replace(LOOSE_SKIP_ALL, '');
+const mdCount = (t) => (t.match(/[*_~`\\]/g) || []).length;   // 마크다운 기호 개수 (삭제 가드용)
 
 // 현재 선택이 "한 메시지의 본문(.mes_text) 안"에 있을 때만 정보를 돌려줌
 function getSelectionInfo() {
@@ -488,28 +544,34 @@ function getSelectionInfo() {
     const pre = document.createRange();
     pre.selectNodeContents(a);
     pre.setEnd(range.startContainer, range.startOffset);
-    const startOffset = pre.toString().length + lead;
+    const preStr = pre.toString();
+    const startOffset = preStr.length + lead;
     const full = a.textContent;
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    // 공백을 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지 (여러 문단에 걸친 선택은 문단 사이 줄바꿈이
-    // 화면 글자(range.toString)와 저장 텍스트에서 서로 달라서, 공백을 무시하고 위치를 찾기 위함)
-    const squash = (t) => t.replace(/\s+/g, '');
-    const fullC = squash(full), textC = squash(text), preC = squash(pre.toString()).length;
+    // 공백과 마크다운 기호를 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지
+    // (여러 문단에 걸친 선택은 줄바꿈이, 서식이 있는 글은 * _ ~ 같은 기호가 화면 글자와 저장 텍스트에서 서로 달라서,
+    //  이들을 무시하고 위치를 찾기 위함)
+    const squash = squashLoose;
+    const fullC = squash(full), textC = squash(text), preC = squash(preStr).length;
     let occurrenceC = 0;
     for (let i = textC ? fullC.indexOf(textC) : -1; i !== -1 && i < preC; i = fullC.indexOf(textC, i + 1)) occurrenceC++;
 
     // 선택이 걸친 <p> 들의 범위 (여러 문단에 걸쳐도 됨). 경계에 닿기만 하고 글자가 안 걸린 문단은 제외
+    // (Range 하나를 재사용해서 문단 수만큼 만들지 않음)
     const ps = paraList(a);
+    const r = document.createRange();
     const hasText = (p) => {
-        const r = document.createRange();
         r.selectNodeContents(p);
         if (p.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
         if (p.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
         return r.toString().trim() !== '';
     };
-    const hit = ps.map((p, i) => ({ p, i })).filter(({ p }) => range.intersectsNode(p) && hasText(p));
+    const hit = [];
+    for (let i = 0; i < ps.length; i++) {
+        if (range.intersectsNode(ps[i]) && hasText(ps[i])) hit.push({ p: ps[i], i });
+    }
     const para = hit.length
         ? {
             index: hit[0].i,
@@ -544,14 +606,17 @@ function findInRaw(raw, text, occurrence) {
     return start === undefined ? null : { start, end: start + text.length };
 }
 
-// 공백(줄바꿈 포함) 차이를 무시하고 찾기: 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고
-// 저장 텍스트에는 "\n\n" 이 있어서 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+// 공백(줄바꿈 포함)과 마크다운 기호(* _ ~ ` \)를 무시하고 찾기:
+//  - 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고 저장 텍스트에는 "\n\n" 이 있음
+//  - 서식이 있으면 화면에는 없는 * _ ~ 같은 기호가 저장 텍스트에는 끼어 있음
+// 둘 다 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
+// (구간의 양 끝에는 무시한 문자가 포함되지 않으므로, 선택 경계의 여는/닫는 기호는 건드리지 않음)
 function findInRawLoose(raw, text, occurrence) {
-    const want = text.replace(/\s+/g, '');
+    const want = squashLoose(text);
     if (!want) return null;
     const chars = [], map = [];
     for (let i = 0; i < raw.length; i++) {
-        if (/\s/.test(raw[i])) continue;
+        if (LOOSE_SKIP_ONE.test(raw[i])) continue;
         chars.push(raw[i]);
         map.push(i);
     }
@@ -628,8 +693,10 @@ const countOccurrences = (raw, text) => (text ? raw.split(text).length - 1 : 0);
 const paraList = (root) => [...root.querySelectorAll('p')].filter((p) => !p.closest('pre, table, code'));
 
 let _fmt = null;
+let _fmtTried = false;
 async function getFormatter() {
-    if (_fmt) return _fmt;
+    if (_fmt || _fmtTried) return _fmt;
+    _fmtTried = true;
     try {
         // 정적 import 로 두면 messageFormatting 이 없는 버전에서 확장 전체가 로드 실패하므로 동적 import
         const mod = await import('../../../../script.js');
@@ -639,6 +706,9 @@ async function getFormatter() {
     }
     return _fmt;
 }
+
+// 문단 수를 셀 때 쓰는 파서 (매번 새로 만들지 않고 재사용)
+const domParser = new DOMParser();
 
 // 텍스트를 빈 줄 기준 블록으로 나눔 (코드펜스 안의 빈 줄은 무시). 각 블록의 원문 내 위치를 같이 돌려줌
 function splitBlocks(text) {
@@ -674,7 +744,7 @@ async function mapParagraph(id, field, para) {
     const val = getField(id, field);
     const countP = (s) => {
         const html = fmt(s, msg.name, !!msg.is_system, !!msg.is_user, id);
-        const doc = new DOMParser().parseFromString(String(html), 'text/html');   // 비활성 문서: 이미지 로드/스크립트 실행 없음
+        const doc = domParser.parseFromString(String(html), 'text/html');   // 비활성 문서: 이미지 로드/스크립트 실행 없음
         return paraList(doc.body).length;
     };
     try {
@@ -771,6 +841,7 @@ async function editExact(mes, id, field, action, info, name, sourceLabel) {
             okButton: 'Save',
             cancelButton: 'Cancel',
             onOpen: () => {
+                // 체크박스는 팝업 DOM 과 함께 사라지므로 따로 해제할 필요 없음
                 const cb = document.getElementById('mf-replace-all');
                 cb?.addEventListener('change', () => { replaceAll = cb.checked; });
             },
@@ -855,12 +926,17 @@ async function showSelectionMenu(mes, info) {
         return;
     }
 
-    // 줄바꿈/공백만 다른 경우(여러 문단에 걸친 선택): 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
+    // 줄바꿈/공백/마크다운 기호(* _ ~ 등)만 다른 경우: 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
     {
         const raw = getField(id, field);
         const loose = findInRawLoose(raw, text, info.occurrenceC ?? 0);
         if (loose) {
             const exact = raw.slice(loose.start, loose.end);
+            // 삭제인데 구간 안에 (선택에는 없던) 마크다운 기호가 끼어 있으면 짝이 깨질 수 있어서 막음
+            if (action === 'delete' && mdCount(exact) > mdCount(text)) {
+                window.toastr?.warning('The selection includes markdown symbols (* _ ~ etc.). Use Edit instead so the formatting is not broken.');
+                return;
+            }
             let occ = 0;
             for (let i = raw.indexOf(exact); i !== -1 && i < loose.start; i = raw.indexOf(exact, i + 1)) occ++;
             await editExact(mes, id, field, action, { ...info, text: exact, occurrence: occ }, name, sourceLabel);
@@ -879,6 +955,7 @@ async function showSelectionMenu(mes, info) {
 // (x, y) 지점에 실제 글자가 있는지 판정 (본문 블록의 빈 공간은 false)
 // 본문(.mes_text) 안의 모든 텍스트 노드의 "줄 단위 사각형"과 직접 비교하므로
 // 줄 오른쪽 끝의 빈 공간도 정확히 여백으로 인식됨
+// (읽기 전용 함수라 레이아웃을 무효화하지 않고, Range 는 하나만 재사용)
 function isOnText(x, y, root) {
     if (!root) return false;
     const rb = root.getBoundingClientRect();
@@ -902,8 +979,20 @@ function isOnText(x, y, root) {
 }
 
 // 이벤트 target 이 .mes 밖(메시지 사이 틈, #chat 자체 등)일 때 좌표로 메시지를 찾음
-function findMesAtPoint(chatEl, x, y) {
-    for (const m of chatEl.querySelectorAll(':scope > .mes')) {
+// 메시지는 위에서 아래로 정렬돼 있으므로 이진 탐색(O(log n))으로 먼저 찾고,
+// 순서가 깨진 특수한 경우에만 기존처럼 전부 훑는다.
+function findMesAtPoint(root, x, y) {
+    const kids = root.children;
+    let lo = 0, hi = kids.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const r = kids[mid].getBoundingClientRect();
+        if (y < r.top) hi = mid - 1;
+        else if (y > r.bottom) lo = mid + 1;
+        else if (kids[mid].matches('.mes') && x >= r.left && x <= r.right) return kids[mid];
+        else break;
+    }
+    for (const m of root.querySelectorAll(':scope > .mes')) {
         const r = m.getBoundingClientRect();
         if (y >= r.top && y <= r.bottom && x >= r.left && x <= r.right) return m;
     }
@@ -972,7 +1061,9 @@ async function showLongPressMenu(mes) {
     }
 }
 
-function initLongPress(chatEl) {
+// 길게 누르기 초기화. 모든 리스너는 signal 로 한 번에 해제되고,
+// 돌려주는 함수는 진행 중인 타이머/테두리 클래스를 정리한다. (destroy 에서 호출)
+function initLongPress(root, signal) {
     let timer = null;       // 팝업을 띄우는 타이머
     let showTimer = null;   // 테두리를 보여주기 시작하는 타이머 (터치 전용)
     let pressedMes = null;
@@ -985,6 +1076,8 @@ function initLongPress(chatEl) {
     let mode = 'msg';
     let pressTouch = false;
     let holdMs = holdTime(DEFAULTS.holdMouse, DEFAULTS.holdMouse);
+
+    const on = (target, type, fn, opts = {}) => target.addEventListener(type, fn, { ...opts, signal });
 
     const releaseNow = () => {
         clearTimeout(releaseTimer);
@@ -1047,15 +1140,14 @@ function initLongPress(chatEl) {
         fireSelection();   // 'sel': 이미 선택된 글자 위를 다시 길게 누른 경우만
     };
 
-    chatEl.addEventListener('pointerdown', (e) => {
+    on(root, 'pointerdown', (e) => {
         fired = false;
         mode = 'msg';
         if (e.pointerType === 'mouse' && e.button !== 0) return;
-        if (!styleEnabled()) return;
 
         // .mes 밖(아바타 아래 빈 칸 등 래퍼/틈)을 눌러도 좌표로 메시지를 찾아 처리
         let mes = e.target.closest?.('.mes') ?? null;
-        if (!mes && e.target === chatEl) mes = findMesAtPoint(chatEl, e.clientX, e.clientY);
+        if (!mes && e.target === root) mes = findMesAtPoint(root, e.clientX, e.clientY);
         if (!mes || e.target.closest?.(LP_IGNORE)) return;
         if (mes.querySelector('textarea.edit_textarea')) return; // 편집 중이면 무시
 
@@ -1066,7 +1158,8 @@ function initLongPress(chatEl) {
         const selHit = inText && hasSelection() && pointOnSelection(e.clientX, e.clientY);
 
         // 패널에서 꺼 둔 기능은 시작하지 않음 (선택 메뉴 / 메시지 메뉴 각각)
-        if (selHit ? !settings().selectionMenu : !settings().longPressMenu) return;
+        const st = settings();
+        if (selHit ? !st.selectionMenu : !st.longPressMenu) return;
 
         // 터치 + 본문 영역: 텍스트 선택을 방해하지 않도록 길게 누르기를 시작하지 않음
         if (!selHit && isTouch && TOUCH_TEXT_SELECTABLE && inText && isOnText(e.clientX, e.clientY, e.target.closest('.mes_text'))) return;
@@ -1075,7 +1168,6 @@ function initLongPress(chatEl) {
         cancel();
         pressTouch = isTouch;
         mode = selHit ? 'sel' : 'msg';
-        const st = settings();
         const touchMs = holdTime(st.holdTouch, 750);
         if (selHit) {
             // 선택한 글자 위: 터치(holdSelTouch) / 마우스(holdSelMouse) 각각 별도 설정을 사용
@@ -1108,43 +1200,46 @@ function initLongPress(chatEl) {
         timer = setTimeout(onHold, holdMs);
     });
 
-    chatEl.addEventListener('pointermove', (e) => {
+    on(root, 'pointermove', (e) => {
         if (!timer) return;
         if (Math.hypot(e.clientX - startX, e.clientY - startY) <= MOVE_TOLERANCE) return;
 
         cancel();
-    });
-    chatEl.addEventListener('pointerup', cancel);
-    ['pointercancel', 'pointerleave'].forEach((ev) => chatEl.addEventListener(ev, () => {
+    }, { passive: true });
+    on(root, 'pointerup', cancel);
+    ['pointercancel', 'pointerleave'].forEach((ev) => on(root, ev, () => {
         // 모바일: 길게 누르는 도중 브라우저가 pointercancel 을 보내는 경우가 있어
         // (아바타 아래 빈 칸 등에서 팝업이 안 뜨던 원인) 터치는 여기서 취소하지 않음.
         // 손가락을 떼면 touchend, 움직이면 touchmove / scroll 에서 취소됨.
         if (pressTouch) return;
         cancel();
     }));
-    chatEl.addEventListener('touchend', cancel, { passive: true });
-    chatEl.addEventListener('touchcancel', cancel, { passive: true });
-    chatEl.addEventListener('touchmove', (e) => {
+    on(root, 'touchend', cancel, { passive: true });
+    on(root, 'touchcancel', cancel, { passive: true });
+    on(root, 'touchmove', (e) => {
         if (!timer) return;
         const t = e.touches[0];
         if (!t || Math.hypot(t.clientX - startX, t.clientY - startY) <= MOVE_TOLERANCE) return;
         cancel();
     }, { passive: true });
-    chatEl.addEventListener('scroll', cancel, { passive: true });
+    on(root, 'scroll', cancel, { passive: true });
 
     // (터치) 텍스트 선택이 시작되면 대기 취소
-    document.addEventListener('selectionchange', () => {
+    // selectionchange 는 아주 자주 발생하므로 타이머가 돌고 있을 때만 검사
+    on(document, 'selectionchange', () => {
         if (timer && mode === 'msg' && pressTouch && hasSelection()) cancel();
     });
 
     // 길게 누른 직후 발생하는 click / contextmenu 차단
     // (캡처 단계에서 막으므로 접힌 바가 임시로 펼쳐지는 일도 없음)
-    chatEl.addEventListener('click', (e) => {
+    on(root, 'click', (e) => {
         if (fired && e.isTrusted) { e.preventDefault(); e.stopPropagation(); fired = false; }
-    }, true);
-    chatEl.addEventListener('contextmenu', (e) => {
+    }, { capture: true });
+    on(root, 'contextmenu', (e) => {
         if (timer || fired) e.preventDefault();
     });
+
+    return () => { releaseNow(); cancel(); };
 }
 
 // ===================== /fold, /unfold =====================
@@ -1167,7 +1262,13 @@ async function foldCommand(value, fold) {
         return '';
     }
     let changed = false;
-    for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
+    if (settings().batchFold) {
+        // 일괄 모드: 데이터만 쭉 수정하고, 화면 갱신은 한 번만 예약 (메시지마다 요소를 찾지 않음)
+        for (let i = range.start; i <= range.end; i++) changed = setFoldData(i, fold) || changed;
+        if (changed) scheduleRefresh();
+    } else {
+        for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
+    }
     if (changed) await saveChatConditional();
     return '';
 }
@@ -1298,12 +1399,12 @@ function initSettingsPanel() {
                         </div>
                         <label class="mf-range">
                             <span class="mf-range-name">Mouse</span>
-                            <input type="range" id="mf_hold_mouse" min="500" max="1000" step="10">
+                            <input type="range" id="mf_hold_mouse" min="400" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_mouse_val"></span>
                         </label>
                         <label class="mf-range">
                             <span class="mf-range-name">Touch</span>
-                            <input type="range" id="mf_hold_touch" min="500" max="1000" step="10">
+                            <input type="range" id="mf_hold_touch" min="400" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_touch_val"></span>
                         </label>
                         <small class="mf-desc">How long to press before the message popup appears. Longer values help avoid accidental popups.</small>
@@ -1349,11 +1450,20 @@ function initSettingsPanel() {
                             <span><span class="mf-radio-title">Double-click the message</span><small class="mf-desc">Double-click (double-tap on mobile) the expanded message to fold it again. Clicking elsewhere does nothing.</small></span>
                         </label>
                     </div>
-                    <small class="mf-desc mf-hint">Click to expand: unread tint and how to close an expanded message.</small>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_batch_fold">
+                            <span class="mf-opt-title">Batch /fold &amp; /unfold</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_batch_fold"><span class="mf-slider"></span></span>
+                        </label>
+                        <small class="mf-desc">Updates all the data first, then redraws the screen only once. Useful when hundreds of messages have piled up and /fold or /unfold takes a long time.</small>
+                    </div>
+                    <small class="mf-desc mf-hint">Click to expand: unread tint, closing an expanded message, and batch /fold.</small>
                 </fieldset>
             </div>
         </div>`;
     host.append(wrap);
+    // 패널 안의 리스너는 wrap 과 함께 사라지므로, wrap 만 제거하면 정리 끝
+    onDispose(() => wrap.remove());
 
     const modes = wrap.querySelector('#mf_link_modes');
     const syncModes = () => modes.classList.toggle('mf-disabled', !settings().linkHideFold);
@@ -1372,6 +1482,7 @@ function initSettingsPanel() {
     bind('mf_auto_fold_comments', 'autoFoldComments');
     bind('mf_auto_hide_comments', 'autoHideComments');
     bind('mf_tint_unseen', 'tintUnseen');
+    bind('mf_batch_fold', 'batchFold');
     bind('mf_long_press_menu', 'longPressMenu');
     bind('mf_selection_menu', 'selectionMenu');
 
@@ -1498,14 +1609,33 @@ function initSettingsPanel() {
     syncModes();
 }
 
-jQuery(() => {
+// ===================== 초기화 =====================
+
+// SillyTavern 이벤트 구독 + 해제 등록을 한 번에
+function listen(name, handler) {
+    const type = event_types[name];
+    if (!type) return;
+    eventSource.on(type, handler);
+    onDispose(() => (eventSource.removeListener ?? eventSource.off)?.call(eventSource, type, handler));
+}
+
+function init() {
+    // 확장이 다시 로드된 경우 이전 인스턴스를 먼저 정리 (리스너/옵저버 중복 방지)
+    globalThis.__messageFoldDestroy?.();
+    globalThis.__messageFoldDestroy = destroy;
+
+    ac = new AbortController();
+    const { signal } = ac;
+
     initSettingsPanel();
     registerSlashCommands();
 
-    const chatEl = document.getElementById('chat');
+    chatEl = document.getElementById('chat');
     if (!chatEl) return;
 
-    document.addEventListener('click', onDocumentClick);
+    syncChatClasses();   // 첫 렌더 전에 클래스부터 맞춤 (버튼이 잠깐 깜빡이는 것 방지)
+
+    document.addEventListener('click', onDocumentClick, { signal });
 
     chatEl.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -1516,13 +1646,22 @@ jQuery(() => {
         if (!mes) return;
         if (t.matches(FOLD_BTN_SELECTOR)) toggleFold(mes);
         else openTemp(mes);
-    });
+    }, { signal });
 
-    new MutationObserver(scheduleRefresh).observe(chatEl, { childList: true });
+    // 새로 추가된 .mes 만 골라서 갱신 (전체를 다시 훑지 않음)
+    const childObserver = new MutationObserver((records) => {
+        for (const r of records) {
+            for (const node of r.addedNodes) {
+                if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('mes')) scheduleRefresh(node);
+            }
+        }
+    });
+    childObserver.observe(chatEl, { childList: true });
+    onDispose(() => childObserver.disconnect());
 
     // Hide & Fold 연동: SillyTavern 이 hide/unhide 할 때 바꾸는 .mes 의 is_system 속성을 감시
     // (/hide, /unhide, 기본 hide 아이콘, 이 확장의 팝업 모두 여기서 잡힘)
-    new MutationObserver((records) => {
+    const hideObserver = new MutationObserver((records) => {
         if (!settings().linkHideFold) return;
         let changed = false;
         for (const r of records) {
@@ -1536,33 +1675,45 @@ jQuery(() => {
             changed = setFold(id, now === 'true') || changed;
         }
         if (changed) saveChatConditional();
-    }).observe(chatEl, { subtree: true, attributes: true, attributeFilter: ['is_system'], attributeOldValue: true });
+    });
+    hideObserver.observe(chatEl, { subtree: true, attributes: true, attributeFilter: ['is_system'], attributeOldValue: true });
+    onDispose(() => hideObserver.disconnect());
 
     // 채팅이 바뀌거나 메시지가 삭제되면 id 가 달라질 수 있으므로 임시 펼침 상태 초기화
     // 자동 접기/숨기기 기준선: 채팅을 열 때 기존 메시지 수로 갱신, 삭제로 줄어들면 같이 낮춤
-    // 클로드가 달아준 주석들 왠지 지우면 안 될 것 같군 ㅋㅋ 너도 내 주석 지우지 마 클로드야 
     syncBaseline();
-    if (event_types.CHAT_CHANGED) eventSource.on(event_types.CHAT_CHANGED, syncBaseline);
-    if (event_types.MESSAGE_DELETED) eventSource.on(event_types.MESSAGE_DELETED, () => { autoBaseline = Math.min(autoBaseline, chat.length); });
+    listen('CHAT_CHANGED', () => { syncBaseline(); openId = null; });
+    listen('MESSAGE_DELETED', () => { autoBaseline = Math.min(autoBaseline, chat.length); openId = null; });
 
-    ['CHAT_CHANGED', 'MESSAGE_DELETED'].forEach((name) => {
-        if (event_types[name]) eventSource.on(event_types[name], () => { openId = null; });
-    });
-
+    // 전체 갱신이 필요한 이벤트 (채팅 전환 / 삭제로 id 가 밀림 / 이전 메시지 더 불러오기)
+    ['CHAT_CHANGED', 'MESSAGE_DELETED', 'MORE_MESSAGES_LOADED'].forEach((name) => listen(name, () => scheduleRefresh()));
+    // 메시지 하나만 바뀌는 이벤트 (첫 인자가 메시지 id)
     [
-        'CHAT_CHANGED',
         'CHARACTER_MESSAGE_RENDERED',
         'USER_MESSAGE_RENDERED',
         'MESSAGE_UPDATED',
         'MESSAGE_EDITED',
         'MESSAGE_SWIPED',
-        'MESSAGE_DELETED',
-        'MORE_MESSAGES_LOADED',
-    ].forEach((name) => {
-        if (event_types[name]) eventSource.on(event_types[name], scheduleRefresh);
+    ].forEach((name) => listen(name, (id) => scheduleRefresh(id)));
+
+    const stopLongPress = initLongPress(chatEl, signal);
+
+    // 정리: 대기 중인 프레임/타이머를 취소하고, 이 확장이 만든 DOM 과 클래스를 제거
+    onDispose(() => {
+        stopLongPress();
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = 0;
+        needFull = false;
+        dirtyIds.clear();
+        dirtyEls.clear();
+        if (chatEl) {
+            chatEl.classList.remove('mf-replace');
+            chatEl.querySelectorAll('.mf-placeholder, .mes_fold, .mes_unfold').forEach((el) => el.remove());
+            chatEl.querySelectorAll('.mes').forEach((m) => m.classList.remove('mf-folded', 'mf-pinned', 'mf-unseen', 'lpd-pressing', 'lpd-touch', 'lpd-nosel'));
+        }
     });
 
-    initLongPress(chatEl);
-
     scheduleRefresh();
-});
+}
+
+jQuery(init);
