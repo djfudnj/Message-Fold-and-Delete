@@ -1036,7 +1036,6 @@ async function showLongPressMenu(mes) {
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
     const pst = settings();
     const swipeCount = Array.isArray(chat[id].swipes) ? chat[id].swipes.length : 0;
-    const swipeNow = Number.isInteger(chat[id].swipe_id) ? chat[id].swipe_id : 0;
 
     // 연동 모드: 'replace' 면 Hide/Fold 버튼을 하나로 합침, 'keep' 이면 두 버튼 그대로 (hide 시 fold 도 같이 적용)
     // comment 도 일반 메시지와 똑같이 연동 (comment 는 처음부터 is_system 이라 항상 '숨김' 상태로 취급됨)
@@ -1054,7 +1053,7 @@ async function showLongPressMenu(mes) {
     // 스와이프가 2개 이상일 때만 (하나뿐이면 메시지 삭제와 같으므로)
     if (pst.popupSwipe && swipeCount > 1) {
         // Delete(OK 버튼)와 같은 빨간색 경고 스타일
-        customButtons.push({ text: `Delete swipe (${swipeNow + 1}/${swipeCount})`, result: CUSTOM_SWIPE, classes: ['redWarningBG'] });
+        customButtons.push({ text: 'Delete swipe', result: CUSTOM_SWIPE, classes: ['redWarningBG'] });
     }
 
     let action = null; // 'delete' | 'hide' | 'fold' | 'swipe' | null
