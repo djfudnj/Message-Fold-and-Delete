@@ -463,3 +463,8 @@
     font-size: 1em;
     font-weight: normal;
 }
+
+/* 맨 위 "Enable ..." 토글: Menu buttons / Hold time 같은 제목과 같은 굵기 */
+.mf-compact .mf-opt-title.mf-strong {
+    font-weight: 600;
+}
