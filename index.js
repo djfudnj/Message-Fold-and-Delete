@@ -47,6 +47,8 @@ const DEFAULTS = {
     batchFold: false, 
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
+    popupDelete: true,      // 길게 누르기 팝업에 Delete 버튼 표시
+    popupEdit: false,       // 길게 누르기 팝업에 Edit 버튼 표시 (메시지 전체 편집)
     popupHide: true,        // 길게 누르기 팝업에 Hide / Unhide 버튼 표시
     popupFold: true,  
     popupSwipe: true, 
@@ -747,6 +749,60 @@ async function mapParagraph(id, field, para) {
     }
 }
 
+// 저장 텍스트에서 블록 하나를 지우고, 남는 빈 줄이 겹치지 않게 정리
+function cutBlock(val, start, end) {
+    let left = val.slice(0, start);
+    let right = val.slice(end).replace(/^\n+/, '');
+    if (!right) left = left.replace(/\s+$/, '');
+    return left + right;
+}
+
+// 번역문에서 선택한 글자의 위치를 찾음 (정확히 일치 → 공백/줄바꿈만 다른 경우 순서). 못 찾으면 null
+function locateInTranslation(id, info) {
+    const raw = getField(id, 'display_text');
+    if (raw.includes(info.text)) {
+        const loc = findInRaw(raw, info.text, info.occurrence);
+        if (loc) return { raw, start: loc.start, end: loc.end };
+    }
+    const loose = findInRawLoose(raw, info.text, info.occurrenceC ?? 0);
+    return loose ? { raw, start: loose.start, end: loose.end } : null;
+}
+
+// 번역문이 있을 때 Delete: 선택한 번역문 + 그에 대응하는 원문(mes) 문단을 함께 삭제
+async function deleteBoth(mes, id, info) {
+    // 1) 먼저 둘 다 위치를 확인 (번역문을 못 찾으면 아무것도 지우지 않음)
+    const tr = locateInTranslation(id, info);
+    if (!tr) {
+        window.toastr?.warning('Could not locate the selected text in the translation. Nothing was deleted.');
+        return;
+    }
+    const orig = await mapParagraph(id, 'mes', info.para);
+    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
+
+    // 2) 원문 먼저 삭제 (MESSAGE_EDITED 가 번역 확장을 건드려도 번역문 수정이 마지막에 적용되게)
+    let origDone = false;
+    if (orig) {
+        const cur = getField(id, 'mes');
+        if (cur.slice(orig.start, orig.end) === orig.text) {
+            await setMessageText(id, cutBlock(cur, orig.start, orig.end));
+            origDone = true;
+        }
+    }
+
+    // 3) 번역문에서 선택한 글자 삭제
+    const trNow = getField(id, 'display_text');
+    if (trNow === tr.raw) {
+        await setDisplayText(id, tr.raw.slice(0, tr.start) + tr.raw.slice(tr.end));
+    } else {
+        window.toastr?.warning('The translation changed; it was not modified.');
+        return;
+    }
+
+    if (!origDone) {
+        window.toastr?.warning("Couldn't match the original paragraph, so only the translation was deleted.");
+    }
+}
+
 const QUOTE_MAX = 50;   // 편집창 안내문에 인용하는 선택 글자 최대 길이
 
 // 문단 단위(성공 시) 또는 메시지 통째(실패 시)로 편집창을 띄워 수정
@@ -860,10 +916,10 @@ async function showSelectionMenu(mes, info) {
     const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
     const translated = hasDisplayText(id);
 
-    const html = `<h3>Selected text</h3>
+    const html = `<h3>Selected text</h3><span class="mf-popup-marker"></span>
         <div style="text-align:left;opacity:.8;margin-top:8px">
             <b>#${id}</b> ${escapeHtml(name)}${translated ? ' · <i>translated</i>' : ''}<br>“${escapeHtml(preview)}”
-        </div>`;
+        </div>${translated ? '<div style="text-align:left;opacity:.6;margin-top:8px;font-size:.85em">Delete removes the selected translation and the matching original paragraph.</div>' : ''}`;
 
     const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
     if (!callGenericPopup || !POPUP_TYPE) return;
@@ -877,7 +933,7 @@ async function showSelectionMenu(mes, info) {
         : [{ text: 'Edit', result: CUSTOM_EDIT }];
 
     const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
-        okButton: translated ? 'Delete (translation)' : 'Delete',
+        okButton: translated ? 'Delete (both)' : 'Delete',
         cancelButton: 'Cancel',
         defaultResult: RESULT_CANCEL,
         customButtons,
@@ -891,7 +947,13 @@ async function showSelectionMenu(mes, info) {
 
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
-    // 번역문이 있으면: Edit original 만 원문(mes), 나머지(Edit/Delete)는 번역문(display_text)이 대상
+    // 번역문이 있을 때 Delete: 번역문 + 대응하는 원문 문단을 함께 삭제
+    if (translated && action === 'delete') {
+        await deleteBoth(mes, id, info);
+        return;
+    }
+
+    // 번역문이 있으면: Edit original 만 원문(mes), Edit 은 번역문(display_text)이 대상
     const field = (translated && action !== 'original') ? 'display_text' : 'mes';
     const sourceLabel = field === 'display_text' ? 'translation' : 'message';
 
@@ -1024,7 +1086,8 @@ async function showLongPressMenu(mes) {
     const folded = isFolded(id);
     const hidden = !!chat[id].is_system;   // /hide 로 숨김 처리된 메시지
 
-    const html = `<h3>Message options</h3>
+    const pstHtml = settings();
+    const html = `<h3>Message options</h3><span class="mf-popup-marker${pstHtml.popupDelete ? '' : ' mf-no-delete'}"></span>
         <div style="text-align:left;opacity:.8;margin-top:8px">
             <b>#${id}</b> ${escapeHtml(name)}<br>${escapeHtml(snippet)}
         </div>`;
@@ -1033,6 +1096,7 @@ async function showLongPressMenu(mes) {
     const CUSTOM_HIDE = POPUP_RESULT?.CUSTOM1 ?? 1001;
     const CUSTOM_FOLD = POPUP_RESULT?.CUSTOM2 ?? 1002;
     const CUSTOM_SWIPE = POPUP_RESULT?.CUSTOM3 ?? 1003;
+    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM4 ?? 1004;
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
     const pst = settings();
     const swipeCount = Array.isArray(chat[id].swipes) ? chat[id].swipes.length : 0;
@@ -1044,6 +1108,7 @@ async function showLongPressMenu(mes) {
     const foldButton = { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD };
     const hideButton = { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE };
     let customButtons = [];
+    if (pst.popupEdit) customButtons.push({ text: 'Edit', result: CUSTOM_EDIT });
     if (mode === 'replace') {
         if (pst.popupHide) customButtons.push({ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE });
     } else {
@@ -1070,6 +1135,7 @@ async function showLongPressMenu(mes) {
         else if (result === CUSTOM_HIDE) action = 'hide';
         else if (result === CUSTOM_FOLD) action = 'fold';
         else if (result === CUSTOM_SWIPE) action = 'swipe';
+        else if (result === CUSTOM_EDIT) action = 'edit';
     } else if (window.confirm('Delete this message?')) {
         action = 'delete';
     }
@@ -1080,6 +1146,15 @@ async function showLongPressMenu(mes) {
 
     if (action === 'fold') {
         await toggleFold(mes);
+    } else if (action === 'edit') {
+        // 접힌 메시지는 임시로 펼친 뒤, ST 기본 편집 버튼을 눌러 편집 모드로 진입
+        if (isFolded(id) && openId !== id) {
+            const prev = openId;
+            openId = id;
+            renderById(prev);
+            render(mes);
+        }
+        mes.querySelector('.mes_edit')?.click();
     } else if (action === 'swipe') {
         if (await deleteCurrentSwipe(id)) window.toastr?.success('Swipe deleted.');
     } else if (action === 'hide') {
@@ -1413,6 +1488,14 @@ function initSettingsPanel() {
                     </div>
                     <div class="mf-item">
                         <div class="mf-head" style="margin-bottom: 6px;">Menu buttons</div>
+                        <label class="mf-opt" for="mf_popup_delete">
+                            <span class="mf-opt-title">Delete</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_delete"><span class="mf-slider"></span></span>
+                        </label>
+                        <label class="mf-opt" for="mf_popup_edit">
+                            <span class="mf-opt-title">Edit</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_edit"><span class="mf-slider"></span></span>
+                        </label>
                         <label class="mf-opt" for="mf_popup_hide">
                             <span class="mf-opt-title">Hide / Unhide</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_popup_hide"><span class="mf-slider"></span></span>
@@ -1473,7 +1556,6 @@ function initSettingsPanel() {
                             <input type="range" id="mf_hold_sel_touch" min="200" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_sel_touch_val"></span>
                         </label>
-                        <small class="mf-desc">How long to press selected text before the Edit / Delete popup appears. Mouse: lower it to open the popup right after you drag-select and click the selection. Touch: if your device starts dragging the text first (e.g. Android), lower this.</small>
                     </div>
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
@@ -1531,6 +1613,8 @@ function initSettingsPanel() {
     bind('mf_batch_fold', 'batchFold');
     bind('mf_long_press_menu', 'longPressMenu');
     bind('mf_selection_menu', 'selectionMenu');
+    bind('mf_popup_delete', 'popupDelete');
+    bind('mf_popup_edit', 'popupEdit');
     bind('mf_popup_hide', 'popupHide');
     bind('mf_popup_fold', 'popupFold');
     bind('mf_popup_swipe', 'popupSwipe');
