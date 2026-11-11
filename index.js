@@ -16,10 +16,7 @@ const AUTO_HIDE_KEY = 'mf_auto_hide'; // 자동 숨기기를 이미 처리한 �
 const AUTO_KEY = 'mf_auto';       // 자동 접기를 이미 한 번 처리한 메시지 (수동으로 펼친 뒤 다시 접히는 것 방지)
 const COMMENT_TYPE = 'comment';   // /comment 등으로 만든 메시지의 extra.type 값
 
-// 미확인(자동 접힘 후 아직 안 눌러본) 바의 인용문 색 덧입힘은 style.css 의 .mf-unseen 규칙에서 처리
-
 // ===== 정리(cleanup) 관리 =====
-// 이 확장이 만든 구독/옵저버/DOM 을 한 곳에서 해제하기 위한 목록
 let disposers = [];
 const onDispose = (fn) => { disposers.push(fn); };
 let ac = null;        // 모든 DOM 리스너가 공유하는 AbortController
@@ -47,9 +44,14 @@ const DEFAULTS = {
     autoScope: 'none',      // 자동 접기/숨기기 대상: 'none'(사용 안 함) | 'comment'(슬래시 명령어 메시지만) | 'all'(유저가 아닌 모든 메시지) | 'every'(유저 메시지 포함 전부)
     tintUnseen: true,       // 자동 접힘 후 안 읽은 바에 색 덧입힘
     closeMode: 'outside',   // 펼친 메시지 닫는 방법: 'outside'(다른 곳 클릭) | 'dblclick'(그 메시지 더블클릭/더블탭)
-    batchFold: false,       // /fold, /unfold 를 "데이터 먼저 수정 → 화면은 한 번만 갱신" 방식으로 처리 (메시지가 아주 많을 때 유용)
+    batchFold: false, 
     longPressMenu: true,    // 메시지 길게 누르기 팝업 (Delete / Hide / Fold) 사용
     selectionMenu: true,    // 글자 선택 후 길게 누르기 팝업 (Edit / Delete selection) 사용
+    popupDelete: true,      // 길게 누르기 팝업에 Delete 버튼 표시
+    popupEdit: false,       // 길게 누르기 팝업에 Edit 버튼 표시 (메시지 전체 편집)
+    popupHide: true,        // 길게 누르기 팝업에 Hide / Unhide 버튼 표시
+    popupFold: true,  
+    popupSwipe: true, 
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
     holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
@@ -58,9 +60,6 @@ const DEFAULTS = {
     holdSelSaved: null,     // 텍스트 선택 (터치 + 마우스) 저장
 };
 
-// settings() 는 렌더/포인터 이벤트마다 불리는 핫패스라서
-// getContext()(호출할 때마다 큰 객체를 새로 만듦)를 매번 부르지 않고 루트 참조만 캐시한다.
-// 기본값 채우기도 설정 객체당 한 번만 한다.
 let settingsRoot = null;
 const settingsReady = new WeakSet();
 function settings() {
@@ -92,8 +91,7 @@ const SLASH_MODEL = 'slash command';
 const isSlashMade = (msg) => !!msg && !msg.is_user && !!msg.extra
     && (msg.extra.model === SLASH_MODEL || isComment(msg));
 
-// 자동 접기/숨기기 대상: 설정에 따라 슬래시 명령어 메시지만 / 유저가 아닌 모든 메시지
-// 이미 있던 메시지는 건드리지 않고, 채팅을 연 시점 이후(id >= autoBaseline)에 생성된 메시지만 대상으로 함
+// 자동 접기/숨기기 대상
 let autoBaseline = Infinity;
 const syncBaseline = () => { autoBaseline = chat.length; };
 const isAutoTarget = (msg, id, scope) => {
@@ -107,8 +105,6 @@ const isAutoTarget = (msg, id, scope) => {
 };
 
 // 상태에 따라 번갈아 나오는 두 개의 버튼 (message hide/unhide 처럼 서로 다른 버튼이 같은 자리에서 교체)
-//  - .mes_fold   : 아직 접기 설정이 안 된 상태에서 보임 → 누르면 접기 설정
-//  - .mes_unfold : 접기 설정된 상태에서 보임        → 누르면 접기 해제
 const ICON_SET = 'fa-compress';
 const ICON_UNSET = 'fa-expand';
 const TITLE_SET = 'Fold message';
@@ -116,9 +112,7 @@ const TITLE_UNSET = 'Unfold message';
 const FOLD_BTN_SELECTOR = '.mes_fold, .mes_unfold';
 
 // ===== 길게 누르기 설정 =====
-// 메시지 길게 누르기 시간은 확장 패널(settings().holdMouse / holdTouch)에서,
-// 선택한 글자 위 길게 누르기 시간은 settings().holdSelTouch(터치) / settings().holdSelMouse(마우스) 로 따로 조절.
-// 선택 메뉴는 시스템 기본 드래그(안드로이드 등)보다 먼저 떠야 해서 최소값을 더 낮게 허용
+
 const HOLD_MIN = 400;
 const SEL_HOLD_MIN = 200;
 const SEL_HOLD_MIN_MOUSE = 10;   // 마우스는 드래그 직후 바로 클릭해도 뜨도록 더 낮게 허용
@@ -514,13 +508,6 @@ const hasSelection = () => {
 
 const SEL_HIT_PAD = 4;
 
-// 느슨한 매칭에서 양쪽 모두 무시할 문자: 공백(줄바꿈 포함) + 마크다운 짝 기호(* _ ~ ` \)
-// (화면에는 기호가 없고 저장 텍스트에는 있는 경우를 맞추기 위함. 화면 글자와 저장 텍스트에 같은 필터를 쓰므로 일관됨)
-const LOOSE_SKIP_ONE = /[\s*_~`\\]/;
-const LOOSE_SKIP_ALL = /[\s*_~`\\]+/g;
-const squashLoose = (t) => t.replace(LOOSE_SKIP_ALL, '');
-const mdCount = (t) => (t.match(/[*_~`\\]/g) || []).length;   // 마크다운 기호 개수 (삭제 가드용)
-
 // 현재 선택이 "한 메시지의 본문(.mes_text) 안"에 있을 때만 정보를 돌려줌
 function getSelectionInfo() {
     const sel = window.getSelection();
@@ -550,10 +537,9 @@ function getSelectionInfo() {
     let occurrence = 0;
     for (let i = full.indexOf(text); i !== -1 && i < startOffset; i = full.indexOf(text, i + 1)) occurrence++;
 
-    // 공백과 마크다운 기호를 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지
-    // (여러 문단에 걸친 선택은 줄바꿈이, 서식이 있는 글은 * _ ~ 같은 기호가 화면 글자와 저장 텍스트에서 서로 달라서,
-    //  이들을 무시하고 위치를 찾기 위함)
-    const squash = squashLoose;
+    // 공백을 모두 뺀 기준으로 같은 글자가 앞에 몇 번 있었는지 (여러 문단에 걸친 선택은 문단 사이 줄바꿈이
+    // 화면 글자(range.toString)와 저장 텍스트에서 서로 달라서, 공백을 무시하고 위치를 찾기 위함)
+    const squash = (t) => t.replace(/\s+/g, '');
     const fullC = squash(full), textC = squash(text), preC = squash(preStr).length;
     let occurrenceC = 0;
     for (let i = textC ? fullC.indexOf(textC) : -1; i !== -1 && i < preC; i = fullC.indexOf(textC, i + 1)) occurrenceC++;
@@ -606,17 +592,14 @@ function findInRaw(raw, text, occurrence) {
     return start === undefined ? null : { start, end: start + text.length };
 }
 
-// 공백(줄바꿈 포함)과 마크다운 기호(* _ ~ ` \)를 무시하고 찾기:
-//  - 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고 저장 텍스트에는 "\n\n" 이 있음
-//  - 서식이 있으면 화면에는 없는 * _ ~ 같은 기호가 저장 텍스트에는 끼어 있음
-// 둘 다 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
-// (구간의 양 끝에는 무시한 문자가 포함되지 않으므로, 선택 경계의 여는/닫는 기호는 건드리지 않음)
+// 공백(줄바꿈 포함) 차이를 무시하고 찾기: 여러 문단을 걸쳐 선택하면 화면 글자에는 문단 사이 줄바꿈이 없고
+// 저장 텍스트에는 "\n\n" 이 있어서 그대로는 못 찾기 때문. 찾으면 저장 텍스트 쪽의 실제 구간을 돌려줌
 function findInRawLoose(raw, text, occurrence) {
-    const want = squashLoose(text);
+    const want = text.replace(/\s+/g, '');
     if (!want) return null;
     const chars = [], map = [];
     for (let i = 0; i < raw.length; i++) {
-        if (LOOSE_SKIP_ONE.test(raw[i])) continue;
+        if (/\s/.test(raw[i])) continue;
         chars.push(raw[i]);
         map.push(i);
     }
@@ -766,6 +749,60 @@ async function mapParagraph(id, field, para) {
     }
 }
 
+// 저장 텍스트에서 블록 하나를 지우고, 남는 빈 줄이 겹치지 않게 정리
+function cutBlock(val, start, end) {
+    let left = val.slice(0, start);
+    let right = val.slice(end).replace(/^\n+/, '');
+    if (!right) left = left.replace(/\s+$/, '');
+    return left + right;
+}
+
+// 번역문에서 선택한 글자의 위치를 찾음 (정확히 일치 → 공백/줄바꿈만 다른 경우 순서). 못 찾으면 null
+function locateInTranslation(id, info) {
+    const raw = getField(id, 'display_text');
+    if (raw.includes(info.text)) {
+        const loc = findInRaw(raw, info.text, info.occurrence);
+        if (loc) return { raw, start: loc.start, end: loc.end };
+    }
+    const loose = findInRawLoose(raw, info.text, info.occurrenceC ?? 0);
+    return loose ? { raw, start: loose.start, end: loose.end } : null;
+}
+
+// 번역문이 있을 때 Delete: 선택한 번역문 + 그에 대응하는 원문(mes) 문단을 함께 삭제
+async function deleteBoth(mes, id, info) {
+    // 1) 먼저 둘 다 위치를 확인 (번역문을 못 찾으면 아무것도 지우지 않음)
+    const tr = locateInTranslation(id, info);
+    if (!tr) {
+        window.toastr?.warning('Could not locate the selected text in the translation. Nothing was deleted.');
+        return;
+    }
+    const orig = await mapParagraph(id, 'mes', info.para);
+    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
+
+    // 2) 원문 먼저 삭제 (MESSAGE_EDITED 가 번역 확장을 건드려도 번역문 수정이 마지막에 적용되게)
+    let origDone = false;
+    if (orig) {
+        const cur = getField(id, 'mes');
+        if (cur.slice(orig.start, orig.end) === orig.text) {
+            await setMessageText(id, cutBlock(cur, orig.start, orig.end));
+            origDone = true;
+        }
+    }
+
+    // 3) 번역문에서 선택한 글자 삭제
+    const trNow = getField(id, 'display_text');
+    if (trNow === tr.raw) {
+        await setDisplayText(id, tr.raw.slice(0, tr.start) + tr.raw.slice(tr.end));
+    } else {
+        window.toastr?.warning('The translation changed; it was not modified.');
+        return;
+    }
+
+    if (!origDone) {
+        window.toastr?.warning("Couldn't match the original paragraph, so only the translation was deleted.");
+    }
+}
+
 const QUOTE_MAX = 50;   // 편집창 안내문에 인용하는 선택 글자 최대 길이
 
 // 문단 단위(성공 시) 또는 메시지 통째(실패 시)로 편집창을 띄워 수정
@@ -879,10 +916,10 @@ async function showSelectionMenu(mes, info) {
     const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
     const translated = hasDisplayText(id);
 
-    const html = `<h3>Selected text</h3>
+    const html = `<h3>Selected text</h3><span class="mf-popup-marker"></span>
         <div style="text-align:left;opacity:.8;margin-top:8px">
             <b>#${id}</b> ${escapeHtml(name)}${translated ? ' · <i>translated</i>' : ''}<br>“${escapeHtml(preview)}”
-        </div>`;
+        </div>${translated ? '<div style="text-align:left;opacity:.6;margin-top:8px;font-size:.85em">Delete removes the selected translation and the matching original paragraph.</div>' : ''}`;
 
     const { callGenericPopup, POPUP_TYPE, POPUP_RESULT } = ctx();
     if (!callGenericPopup || !POPUP_TYPE) return;
@@ -896,7 +933,7 @@ async function showSelectionMenu(mes, info) {
         : [{ text: 'Edit', result: CUSTOM_EDIT }];
 
     const result = await callGenericPopup(html, POPUP_TYPE.CONFIRM, '', {
-        okButton: translated ? 'Delete (translation)' : 'Delete',
+        okButton: translated ? 'Delete (both)' : 'Delete',
         cancelButton: 'Cancel',
         defaultResult: RESULT_CANCEL,
         customButtons,
@@ -910,7 +947,13 @@ async function showSelectionMenu(mes, info) {
 
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id) return;
 
-    // 번역문이 있으면: Edit original 만 원문(mes), 나머지(Edit/Delete)는 번역문(display_text)이 대상
+    // 번역문이 있을 때 Delete: 번역문 + 대응하는 원문 문단을 함께 삭제
+    if (translated && action === 'delete') {
+        await deleteBoth(mes, id, info);
+        return;
+    }
+
+    // 번역문이 있으면: Edit original 만 원문(mes), Edit 은 번역문(display_text)이 대상
     const field = (translated && action !== 'original') ? 'display_text' : 'mes';
     const sourceLabel = field === 'display_text' ? 'translation' : 'message';
 
@@ -926,17 +969,12 @@ async function showSelectionMenu(mes, info) {
         return;
     }
 
-    // 줄바꿈/공백/마크다운 기호(* _ ~ 등)만 다른 경우: 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
+    // 줄바꿈/공백만 다른 경우(여러 문단에 걸친 선택): 저장 텍스트의 실제 구간을 찾아 그 부분만 편집
     {
         const raw = getField(id, field);
         const loose = findInRawLoose(raw, text, info.occurrenceC ?? 0);
         if (loose) {
             const exact = raw.slice(loose.start, loose.end);
-            // 삭제인데 구간 안에 (선택에는 없던) 마크다운 기호가 끼어 있으면 짝이 깨질 수 있어서 막음
-            if (action === 'delete' && mdCount(exact) > mdCount(text)) {
-                window.toastr?.warning('The selection includes markdown symbols (* _ ~ etc.). Use Edit instead so the formatting is not broken.');
-                return;
-            }
             let occ = 0;
             for (let i = raw.indexOf(exact); i !== -1 && i < loose.start; i = raw.indexOf(exact, i + 1)) occ++;
             await editExact(mes, id, field, action, { ...info, text: exact, occurrence: occ }, name, sourceLabel);
@@ -999,6 +1037,46 @@ function findMesAtPoint(root, x, y) {
     return null;
 }
 
+// 현재 보이는 스와이프 하나만 삭제 (메시지는 남김). 스와이프가 1개뿐이면 아무것도 하지 않음
+// 접기 상태(extra 의 fold 관련 키)는 스와이프 전환으로 extra 가 바뀌어도 유지
+async function deleteCurrentSwipe(id) {
+    const msg = chat[id];
+    const swipes = msg?.swipes;
+    if (!Array.isArray(swipes) || swipes.length <= 1) return false;
+
+    const cur = Number.isInteger(msg.swipe_id) ? msg.swipe_id : 0;
+    const keep = {};
+    for (const k of [KEY, UNSEEN_KEY, AUTO_KEY, AUTO_HIDE_KEY]) if (msg.extra?.[k] !== undefined) keep[k] = msg.extra[k];
+
+    swipes.splice(cur, 1);
+    if (Array.isArray(msg.swipe_info)) msg.swipe_info.splice(cur, 1);
+
+    const next = Math.min(cur, swipes.length - 1);
+    msg.swipe_id = next;
+    msg.mes = swipes[next];
+    const info = Array.isArray(msg.swipe_info) ? msg.swipe_info[next] : null;
+    if (info) {
+        msg.extra = structuredClone(info.extra ?? {});
+        if (info.send_date !== undefined) msg.send_date = info.send_date;
+        if (info.gen_started !== undefined) msg.gen_started = info.gen_started;
+        if (info.gen_finished !== undefined) msg.gen_finished = info.gen_finished;
+    }
+    msg.extra ??= {};
+    Object.assign(msg.extra, keep);
+
+    updateMessageBlock(id, msg);
+    const mesEl = mesById(id);
+    const counter = mesEl?.querySelector('.swipes-counter');
+    if (counter) counter.textContent = `${next + 1}\u200b/\u200b${swipes.length}`;
+
+    if (event_types.MESSAGE_SWIPE_DELETED) {
+        await eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId: id, swipeId: cur, newSwipeId: next });
+    }
+    await eventSource.emit(event_types.MESSAGE_UPDATED, id);
+    await saveChatConditional();
+    return true;
+}
+
 async function showLongPressMenu(mes) {
     const id = Number(mes.getAttribute('mesid'));
     if (Number.isNaN(id) || !chat[id]) return;
@@ -1008,7 +1086,8 @@ async function showLongPressMenu(mes) {
     const folded = isFolded(id);
     const hidden = !!chat[id].is_system;   // /hide 로 숨김 처리된 메시지
 
-    const html = `<h3>Message options</h3>
+    const pstHtml = settings();
+    const html = `<h3>Message options</h3><span class="mf-popup-marker${pstHtml.popupDelete ? '' : ' mf-no-delete'}"></span>
         <div style="text-align:left;opacity:.8;margin-top:8px">
             <b>#${id}</b> ${escapeHtml(name)}<br>${escapeHtml(snippet)}
         </div>`;
@@ -1016,7 +1095,11 @@ async function showLongPressMenu(mes) {
     const { callGenericPopup, POPUP_TYPE, POPUP_RESULT, executeSlashCommandsWithOptions } = ctx();
     const CUSTOM_HIDE = POPUP_RESULT?.CUSTOM1 ?? 1001;
     const CUSTOM_FOLD = POPUP_RESULT?.CUSTOM2 ?? 1002;
+    const CUSTOM_SWIPE = POPUP_RESULT?.CUSTOM3 ?? 1003;
+    const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM4 ?? 1004;
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
+    const pst = settings();
+    const swipeCount = Array.isArray(chat[id].swipes) ? chat[id].swipes.length : 0;
 
     // 연동 모드: 'replace' 면 Hide/Fold 버튼을 하나로 합침, 'keep' 이면 두 버튼 그대로 (hide 시 fold 도 같이 적용)
     // comment 도 일반 메시지와 똑같이 연동 (comment 는 처음부터 is_system 이라 항상 '숨김' 상태로 취급됨)
@@ -1024,11 +1107,21 @@ async function showLongPressMenu(mes) {
     const linked = !!mode;
     const foldButton = { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD };
     const hideButton = { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE };
-    let customButtons;
-    if (mode === 'replace') customButtons = [{ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE }];
-    else customButtons = [hideButton, foldButton];
+    let customButtons = [];
+    if (pst.popupEdit) customButtons.push({ text: 'Edit', result: CUSTOM_EDIT });
+    if (mode === 'replace') {
+        if (pst.popupHide) customButtons.push({ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE });
+    } else {
+        if (pst.popupHide) customButtons.push(hideButton);
+        if (pst.popupFold) customButtons.push(foldButton);
+    }
+    // 스와이프가 2개 이상일 때만 (하나뿐이면 메시지 삭제와 같으므로)
+    if (pst.popupSwipe && swipeCount > 1) {
+        // Delete(OK 버튼)와 같은 빨간색 경고 스타일
+        customButtons.push({ text: 'Delete swipe', result: CUSTOM_SWIPE, classes: ['redWarningBG'] });
+    }
 
-    let action = null; // 'delete' | 'hide' | 'fold' | null
+    let action = null; // 'delete' | 'hide' | 'fold' | 'swipe' | null
     if (callGenericPopup && POPUP_TYPE) {
         // OK 버튼(빨간색) = Delete.
         // 버튼은 팝업 기본 배치(한 줄) 그대로 사용
@@ -1041,6 +1134,8 @@ async function showLongPressMenu(mes) {
         if (POPUP_RESULT ? result === POPUP_RESULT.AFFIRMATIVE : result === true) action = 'delete';
         else if (result === CUSTOM_HIDE) action = 'hide';
         else if (result === CUSTOM_FOLD) action = 'fold';
+        else if (result === CUSTOM_SWIPE) action = 'swipe';
+        else if (result === CUSTOM_EDIT) action = 'edit';
     } else if (window.confirm('Delete this message?')) {
         action = 'delete';
     }
@@ -1051,6 +1146,17 @@ async function showLongPressMenu(mes) {
 
     if (action === 'fold') {
         await toggleFold(mes);
+    } else if (action === 'edit') {
+        // 접힌 메시지는 임시로 펼친 뒤, ST 기본 편집 버튼을 눌러 편집 모드로 진입
+        if (isFolded(id) && openId !== id) {
+            const prev = openId;
+            openId = id;
+            renderById(prev);
+            render(mes);
+        }
+        mes.querySelector('.mes_edit')?.click();
+    } else if (action === 'swipe') {
+        if (await deleteCurrentSwipe(id)) window.toastr?.success('Swipe deleted.');
     } else if (action === 'hide') {
         // hide 는 is_system = true, unhide 는 false 로 저장됩니다.
         await executeSlashCommandsWithOptions(`/${hidden ? 'unhide' : 'hide'} ${id}`);
@@ -1373,21 +1479,35 @@ function initSettingsPanel() {
                     <small class="mf-desc mf-hint">Click to expand: auto-fold or hide new messages.</small>
                 </fieldset>
                 <fieldset class="mf-box mf-compact">
-                    <legend><i class="fa-solid fa-hand-pointer"></i>Delete &amp; Edit</legend>
+                    <legend><i class="fa-solid fa-hand-pointer"></i>Long Press Options</legend>
                     <div class="mf-item">
-                    <div class="mf-head" style="margin-bottom: 6px;">Activate / Inactivate</div>
                         <label class="mf-opt" for="mf_long_press_menu">
-                            <span class="mf-opt-title">Long-press message menu</span>
+                            <span class="mf-opt-title mf-strong">Enable Long-press message menu</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_long_press_menu"><span class="mf-slider"></span></span>
                         </label>
-                        <small class="mf-desc">Press and hold a message to open the menu with Delete, Hide and Fold.</small>
                     </div>
                     <div class="mf-item">
-                        <label class="mf-opt" for="mf_selection_menu">
-                            <span class="mf-opt-title">Selection edit &amp; delete</span>
-                            <span class="mf-switch"><input type="checkbox" id="mf_selection_menu"><span class="mf-slider"></span></span>
+                        <div class="mf-head" style="margin-bottom: 6px;">Menu buttons</div>
+                        <label class="mf-opt" for="mf_popup_delete">
+                            <span class="mf-opt-title">Delete</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_delete"><span class="mf-slider"></span></span>
                         </label>
-                        <small class="mf-desc">Select text, then press and hold the selection to edit or delete just that part.</small>
+                        <label class="mf-opt" for="mf_popup_edit">
+                            <span class="mf-opt-title">Edit</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_edit"><span class="mf-slider"></span></span>
+                        </label>
+                        <label class="mf-opt" for="mf_popup_hide">
+                            <span class="mf-opt-title">Hide / Unhide</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_hide"><span class="mf-slider"></span></span>
+                        </label>
+                        <label class="mf-opt" for="mf_popup_fold">
+                            <span class="mf-opt-title">Fold / Unfold</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_fold"><span class="mf-slider"></span></span>
+                        </label>
+                        <label class="mf-opt" for="mf_popup_swipe">
+                            <span class="mf-opt-title">Delete swipe</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_swipe"><span class="mf-slider"></span></span>
+                        </label> 
                     </div>
                     <div class="mf-item">
                         <div class="mf-head mf-head-row">
@@ -1409,9 +1529,18 @@ function initSettingsPanel() {
                         </label>
                         <small class="mf-desc">How long to press before the message popup appears. Longer values help avoid accidental popups.</small>
                     </div>
+                </fieldset>
+                <fieldset class="mf-box mf-compact">
+                    <legend><i class="fa-solid fa-i-cursor"></i>Drag to Edit Options</legend>
+                    <div class="mf-item">
+                        <label class="mf-opt" for="mf_selection_menu">
+                            <span class="mf-opt-title mf-strong">Enable Selection edit &amp; delete</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_selection_menu"><span class="mf-slider"></span></span>
+                        </label>
+                    </div>
                     <div class="mf-item">
                         <div class="mf-head mf-head-row">
-                            <span>Text selection hold time</span>
+                            <span>Hold time</span>
                             <span class="mf-head-btns">
                                 <button type="button" class="mf-reset" id="mf_hold_sel_save" title="Save current text selection hold time" aria-label="Save current text selection hold time"><i class="fa-solid fa-floppy-disk"></i></button>
                                 <button type="button" class="mf-reset" id="mf_hold_sel_reset" title="Reset text selection hold time to saved value (or default)" aria-label="Reset text selection hold time to saved value (or default)"><i class="fa-solid fa-rotate-left"></i></button>
@@ -1427,7 +1556,6 @@ function initSettingsPanel() {
                             <input type="range" id="mf_hold_sel_touch" min="200" max="1000" step="10">
                             <span class="mf-range-val" id="mf_hold_sel_touch_val"></span>
                         </label>
-                        <small class="mf-desc">How long to press selected text before the Edit / Delete popup appears. Mouse: lower it to open the popup right after you drag-select and click the selection. Touch: if your device starts dragging the text first (e.g. Android), lower this.</small>
                     </div>
                 </fieldset>
                 <fieldset class="mf-box mf-collapsible mf-collapsed">
@@ -1485,6 +1613,11 @@ function initSettingsPanel() {
     bind('mf_batch_fold', 'batchFold');
     bind('mf_long_press_menu', 'longPressMenu');
     bind('mf_selection_menu', 'selectionMenu');
+    bind('mf_popup_delete', 'popupDelete');
+    bind('mf_popup_edit', 'popupEdit');
+    bind('mf_popup_hide', 'popupHide');
+    bind('mf_popup_fold', 'popupFold');
+    bind('mf_popup_swipe', 'popupSwipe');
 
     // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
     const bindRange = (id, key, fallback, min = HOLD_MIN) => {
