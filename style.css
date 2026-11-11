@@ -183,6 +183,31 @@
     to   { box-shadow: inset 0 0 0 1.5px rgb(100 0 0 / 50%); }
 }
 
+/* ===== 팝업 버튼이 많을 때 (모바일): 다음 줄로 넘김 =====
+   index.js 가 팝업 본문에 .mf-popup-marker 를 넣어 두므로, :has() 로 이 확장의 팝업만 골라 적용 */
+.popup:has(.mf-popup-marker) .popup-controls {
+    display: flex !important;
+    flex-flow: row wrap !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+}
+
+.popup:has(.mf-popup-marker) .popup-controls > * {
+    flex: 1 1 auto !important;
+    min-width: max-content !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    white-space: normal !important;
+    text-align: center !important;
+}
+
+/* 롱프레스 메뉴에서 Delete 를 끈 경우: 기본 OK(Delete) 버튼 숨김 */
+.popup:has(.mf-no-delete) .popup-button-ok {
+    display: none !important;
+}
+
 /* ===== 확장 패널 (Message Fold & Delete) =====
    간격은 Tavern Helper(Tailwind) 의 --spacing 을 따르고, 없으면 4px 기준 (15px = 4px x 3.75) */
 .mf-settings {
@@ -462,4 +487,9 @@
 .mf-compact .mf-opt-title {
     font-size: 1em;
     font-weight: normal;
+}
+
+/* 맨 위 "Enable ..." 토글: Menu buttons / Hold time 같은 제목과 같은 굵기 */
+.mf-compact .mf-opt-title.mf-strong {
+    font-weight: 600;
 }
