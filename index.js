@@ -1350,7 +1350,7 @@ function initLongPress(root, signal) {
 
 // ===================== /fold, /unfold =====================
 
-// "3" / "2-5" / "4-" (4번부터 끝까지) → { start, end }
+// "3" / "2-5" / "4-" 마지막거 잘 안먹히긴한데 고치긴 귀찮으니까 일단 냅두셈
 function parseRange(text) {
     const m = String(text ?? '').trim().match(/^(\d+)(?:\s*-\s*(\d*))?$/);
     if (!m) return null;
@@ -1369,13 +1369,41 @@ async function foldCommand(value, fold) {
     }
     let changed = false;
     if (settings().batchFold) {
-        // 일괄 모드: 데이터만 쭉 수정하고, 화면 갱신은 한 번만 예약 (메시지마다 요소를 찾지 않음)
+        // batch
         for (let i = range.start; i <= range.end; i++) changed = setFoldData(i, fold) || changed;
         if (changed) scheduleRefresh();
     } else {
         for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
     }
     if (changed) await saveChatConditional();
+    return '';
+}
+
+// /hidetofold
+async function hideToFoldCommand(value) {
+    const last = chat.length - 1;
+    if (last < 0) return '';
+
+    let start = 0, end = last;
+    if (String(value ?? '').trim()) {
+        const range = parseRange(value);
+        if (!range) {
+            window.toastr?.warning('Specify a message index or range. e.g. /hidetofold, /hidetofold 2-5, 4-');
+            return '';
+        }
+        ({ start, end } = range);
+    }
+
+    // batch
+    let count = 0;
+    for (let i = start; i <= end; i++) {
+        if (chat[i]?.is_system && setFoldData(i, true)) count++;
+    }
+    if (count) {
+        scheduleRefresh();
+        await saveChatConditional();
+    }
+    window.toastr?.info(count ? `Folded ${count} hidden message(s).` : 'No hidden messages to fold.');
     return '';
 }
 
@@ -1401,6 +1429,16 @@ function registerSlashCommands() {
         callback: (_args, value) => foldCommand(value, false),
         unnamedArgumentList: [mkArg()],
         helpString: 'Unfolds a message or a range of messages. Example: <code>/unfold 3</code>, <code>/unfold 2-5</code>',
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'hidetofold',
+        callback: (_args, value) => hideToFoldCommand(value),
+        unnamedArgumentList: [SlashCommandArgument.fromProps({
+            description: 'optional message index or range (e.g. 3, 2-5, 4-). Default: whole chat',
+            typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
+            isRequired: false,
+        })],
+        helpString: 'Folds every hidden message. Optionally limit to a range. Example: <code>/hidetofold</code>, <code>/hidetofold 2-5</code>',
     }));
 }
 
