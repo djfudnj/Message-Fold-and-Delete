@@ -27,11 +27,17 @@ A SillyTavern extension that folds messages into a single bar and manages messag
 * **Translation support** – If the message has a translation, the popup becomes **Edit translation**, **Edit original**, **Delete (translation)**, and **Cancel**. Editing the translation never touches the original text that goes into the prompt.
 * **Paragraph editing fallback** – If the selected text can't be found exactly in the saved source (markdown, XML tags, regex scripts, etc.), **Edit** opens the whole matching paragraph(s) in an edit box instead.
 * **Replace all** – When editing selected text that appears multiple times in the message, check "Replace all" to replace every occurrence at once.
-* **`/fold` and `/unfold` commands** – Supports single message indices or ranges:
-  * `/fold 3` : message 3
-  * `/fold 2-5` : messages 2 to 5
 * **Link Hide & Fold** – Hiding a message automatically folds it, and unhiding unfolds it. Works with `/hide`, `/unhide`, the hide icon, and the long-press popup.
 * **Auto Fold & Hide** – Automatically fold and/or hide newly created messages (slash commands, character replies, or all messages). Messages that already exist are never touched.
+
+## Commands
+
+* **`/fold`, `/unfold`** – Supports single message indices or ranges:
+  * `/fold 3` : message 3
+  * `/fold 2-5` : messages 2 to 5
+* **`/hidetofold`** – Folds every hidden message. Handy for messages that were already hidden before you turned on Link Hide & Fold. Omit the range to apply it to the whole chat, or add one to limit it:
+  * `/hidetofold` : whole chat
+  * `/hidetofold 0-200` : hidden messages from 0 to 200
 
 ## Settings Panel
 
@@ -124,11 +130,17 @@ AGPL-3.0
 * **번역문 지원** – 메시지에 번역문이 있으면 **번역문 편집(Edit translation)**, **원문 편집(Edit original)**, **번역문 삭제(Delete (translation))**, **취소(Cancel)** 로 바뀝니다. 번역문을 수정해도 프롬프트에 들어가는 원문은 건드리지 않습니다.
 * **문단 단위 편집 (폴백)** – 선택한 글자가 저장된 원문에 그대로 없을 때(마크다운, XML 태그, 정규식 스크립트 등) **편집**을 누르면 해당 문단 전체를 편집창에 띄웁니다.
 * **모두 바꾸기 (Replace all)** – 선택한 글자가 해당 메시지 안에 여러 번 나오면 "모두 바꾸기" 체크박스를 통해 한 번에 일괄 수정할 수 있습니다.
-* **`/fold`, `/unfold` 명령어** – `/hide`처럼 번호나 범위를 지정하여 접고 펼칠 수 있습니다.
-  * `/fold 3` : 3번 메시지 접기
-  * `/fold 2-5` : 2번부터 5번까지 접기
 * **Hide & Fold 연동** – 메시지를 숨기면 자동으로 접히고, 숨김을 해제하면 자동으로 펼쳐집니다. `/hide`, `/unhide`, 숨기기 아이콘, 길게 누르기 팝업 모두에서 작동합니다.
 * **자동 접기 및 숨기기** – 새로 생성되는 메시지(슬래시 명령어, 캐릭터 답변, 또는 전체 메시지)를 조건에 따라 자동으로 접거나 숨깁니다. 이미 있던 메시지는 건드리지 않습니다.
+
+## 명령어
+
+* **`/fold`, `/unfold`** – `/hide`처럼 번호나 범위를 지정하여 접고 펼칠 수 있습니다.
+  * `/fold 3` : 3번 메시지 접기
+  * `/fold 2-5` : 2번부터 5번까지 접기
+* **`/hidetofold`** – 숨겨진(hide) 메시지를 전부 접습니다. Link Hide & Fold를 켜기 전에 이미 숨겨둔 메시지를 한꺼번에 접을 때 편리합니다. 범위를 생략하면 채팅 전체에 적용되고, 범위를 지정하면 그 안의 숨김 메시지만 접습니다.
+  * `/hidetofold` : 채팅 전체
+  * `/hidetofold 0-200` : 0번부터 200번까지의 숨김 메시지
 
 ## 확장 설정 (Settings)
 
