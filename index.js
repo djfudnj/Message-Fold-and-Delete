@@ -1414,7 +1414,7 @@ function registerSlashCommands() {
         return;
     }
     const mkArg = () => SlashCommandArgument.fromProps({
-        description: 'message index or range (e.g. 3, 2-5, 4-)',
+        description: 'message index or range (e.g. 3, 2-5)',
         typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
         isRequired: true,
     });
@@ -1434,7 +1434,7 @@ function registerSlashCommands() {
         name: 'hidetofold',
         callback: (_args, value) => hideToFoldCommand(value),
         unnamedArgumentList: [SlashCommandArgument.fromProps({
-            description: 'optional message index or range (e.g. 3, 2-5, 4-). Default: whole chat',
+            description: 'optional message index or range (e.g. 3, 2-5). Default: whole chat',
             typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
             isRequired: false,
         })],
