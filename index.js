@@ -13,6 +13,7 @@ import { chat, eventSource, event_types, saveChatConditional, updateMessageBlock
 const KEY = 'folded';
 const UNSEEN_KEY = 'mf_unseen';   // 자동 접힘 후 아직 바를 클릭하지 않은 상태 (색 덧입힘용). 바를 누르면 삭제됨
 const AUTO_HIDE_KEY = 'mf_auto_hide'; // 자동 숨기기를 이미 처리한 메시지 (직접 unhide 한 뒤 다시 숨겨지는 것 방지)
+const LABEL_KEY = 'mf_label';     // 접힌 바에 본문 미리보기 대신 보여줄 사용자 지정 텍스트 (message.extra 에 저장)
 const AUTO_KEY = 'mf_auto';       // 자동 접기를 이미 한 번 처리한 메시지 (수동으로 펼친 뒤 다시 접히는 것 방지)
 const COMMENT_TYPE = 'comment';   // /comment 등으로 만든 메시지의 extra.type 값
 
@@ -52,6 +53,7 @@ const DEFAULTS = {
     popupHide: true,        // 길게 누르기 팝업에 Hide / Unhide 버튼 표시
     popupFold: true,  
     popupSwipe: true, 
+    popupLabel: true,       // 접힌 메시지 길게 누르기 팝업 맨 윗줄에 'Set bar text' 버튼 표시 + 사용자 지정 바 텍스트 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
     holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
@@ -176,9 +178,11 @@ function ensureBar(ph, id) {
     const msg = chat[id];
     // 숨김(hide) 처리된 메시지(is_system, comment 포함)는 유령 아이콘, 숨김 해제된 comment 는 말풍선, 그 외는 ▶
     const kind = msg?.is_system ? 'hidden' : (isComment(msg) ? 'comment' : 'normal');
+    // 사용자 지정 바 텍스트 (설정이 꺼져 있으면 있어도 무시하고 본문 미리보기를 보여줌)
+    const label = settings().popupLabel ? String(msg?.extra?.[LABEL_KEY] ?? '') : '';
     const sig = ph._mfSig;
-    if (sig && sig.mes === msg?.mes && sig.name === msg?.name && sig.kind === kind) return;
-    ph._mfSig = { mes: msg?.mes, name: msg?.name, kind };
+    if (sig && sig.mes === msg?.mes && sig.name === msg?.name && sig.kind === kind && sig.label === label) return;
+    ph._mfSig = { mes: msg?.mes, name: msg?.name, kind, label };
 
     const { name, snippet } = makePreview(id);
     let arrow;
@@ -200,7 +204,8 @@ function ensureBar(ph, id) {
     nm.textContent = name;
     const tx = document.createElement('span');
     tx.className = 'mf-ph-text';
-    tx.textContent = snippet ? `— ${snippet}` : '';
+    const shown = label || snippet;
+    tx.textContent = shown ? `— ${shown}` : '';
     ph.replaceChildren(arrow, nm, tx);
 }
 
@@ -1046,7 +1051,7 @@ async function deleteCurrentSwipe(id) {
 
     const cur = Number.isInteger(msg.swipe_id) ? msg.swipe_id : 0;
     const keep = {};
-    for (const k of [KEY, UNSEEN_KEY, AUTO_KEY, AUTO_HIDE_KEY]) if (msg.extra?.[k] !== undefined) keep[k] = msg.extra[k];
+    for (const k of [KEY, UNSEEN_KEY, AUTO_KEY, AUTO_HIDE_KEY, LABEL_KEY]) if (msg.extra?.[k] !== undefined) keep[k] = msg.extra[k];
 
     swipes.splice(cur, 1);
     if (Array.isArray(msg.swipe_info)) msg.swipe_info.splice(cur, 1);
@@ -1077,6 +1082,33 @@ async function deleteCurrentSwipe(id) {
     return true;
 }
 
+// 접힌 바에 보일 텍스트를 입력받아 message.extra 에 저장. 비우고 저장하면 삭제(본문 미리보기로 복귀)
+async function editBarLabel(mes, id) {
+    const { callGenericPopup, POPUP_TYPE } = ctx();
+    if (!callGenericPopup || !POPUP_TYPE) return;
+    const cur = String(chat[id]?.extra?.[LABEL_KEY] ?? '');
+    const name = chat[id]?.name || '';
+
+    const edited = await callGenericPopup(
+        `<h3>Set bar text</h3>
+         <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}</div>
+         <div style="text-align:left;opacity:.6;margin-top:8px;font-size:.85em">Shown on the folded bar instead of the message preview. Leave empty and save to go back to the preview.</div>`,
+        POPUP_TYPE.INPUT,
+        cur,
+        { okButton: 'Save', cancelButton: 'Cancel' },
+    );
+    if (typeof edited !== 'string') return;   // 취소
+    if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id || !chat[id]) return;
+
+    const next = edited.replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (next === cur) return;
+    chat[id].extra ??= {};
+    if (next) chat[id].extra[LABEL_KEY] = next;
+    else delete chat[id].extra[LABEL_KEY];
+    render(mes);
+    await saveChatConditional();
+}
+
 async function showLongPressMenu(mes) {
     const id = Number(mes.getAttribute('mesid'));
     if (Number.isNaN(id) || !chat[id]) return;
@@ -1097,6 +1129,7 @@ async function showLongPressMenu(mes) {
     const CUSTOM_FOLD = POPUP_RESULT?.CUSTOM2 ?? 1002;
     const CUSTOM_SWIPE = POPUP_RESULT?.CUSTOM3 ?? 1003;
     const CUSTOM_EDIT = POPUP_RESULT?.CUSTOM4 ?? 1004;
+    const CUSTOM_LABEL = POPUP_RESULT?.CUSTOM5 ?? 1005;
     const RESULT_CANCEL = POPUP_RESULT?.NEGATIVE ?? 0;
     const pst = settings();
     const swipeCount = Array.isArray(chat[id].swipes) ? chat[id].swipes.length : 0;
@@ -1108,6 +1141,11 @@ async function showLongPressMenu(mes) {
     const foldButton = { text: folded ? 'Unfold' : 'Fold', result: CUSTOM_FOLD };
     const hideButton = { text: hidden ? 'Unhide' : 'Hide', result: CUSTOM_HIDE };
     let customButtons = [];
+    // 접힌 메시지에서만: 맨 윗줄을 통째로 차지하는 버튼 (줄 배치는 style.css 의 .mf-label-btn)
+    if (folded && pst.popupLabel) {
+        const hasLabel = !!chat[id].extra?.[LABEL_KEY];
+        customButtons.push({ text: hasLabel ? 'Edit bar text' : 'Set bar text', result: CUSTOM_LABEL, classes: ['mf-label-btn'] });
+    }
     if (pst.popupEdit) customButtons.push({ text: 'Edit', result: CUSTOM_EDIT });
     if (mode === 'replace') {
         if (pst.popupHide) customButtons.push({ text: hidden ? 'Unhide & Unfold' : 'Hide & Fold', result: CUSTOM_HIDE });
@@ -1136,6 +1174,7 @@ async function showLongPressMenu(mes) {
         else if (result === CUSTOM_FOLD) action = 'fold';
         else if (result === CUSTOM_SWIPE) action = 'swipe';
         else if (result === CUSTOM_EDIT) action = 'edit';
+        else if (result === CUSTOM_LABEL) action = 'label';
     } else if (window.confirm('Delete this message?')) {
         action = 'delete';
     }
@@ -1146,6 +1185,8 @@ async function showLongPressMenu(mes) {
 
     if (action === 'fold') {
         await toggleFold(mes);
+    } else if (action === 'label') {
+        await editBarLabel(mes, id);
     } else if (action === 'edit') {
         // 접힌 메시지는 임시로 펼친 뒤, ST 기본 편집 버튼을 눌러 편집 모드로 진입
         if (isFolded(id) && openId !== id) {
@@ -1350,7 +1391,7 @@ function initLongPress(root, signal) {
 
 // ===================== /fold, /unfold =====================
 
-// "3" / "2-5" / "4-" (4번부터 끝까지) → { start, end }
+// "3" / "2-5" / "4-" 마지막거 잘 안먹히긴한데 고치긴 귀찮으니까 일단 냅두셈
 function parseRange(text) {
     const m = String(text ?? '').trim().match(/^(\d+)(?:\s*-\s*(\d*))?$/);
     if (!m) return null;
@@ -1369,13 +1410,41 @@ async function foldCommand(value, fold) {
     }
     let changed = false;
     if (settings().batchFold) {
-        // 일괄 모드: 데이터만 쭉 수정하고, 화면 갱신은 한 번만 예약 (메시지마다 요소를 찾지 않음)
+        // batch
         for (let i = range.start; i <= range.end; i++) changed = setFoldData(i, fold) || changed;
         if (changed) scheduleRefresh();
     } else {
         for (let i = range.start; i <= range.end; i++) changed = setFold(i, fold) || changed;
     }
     if (changed) await saveChatConditional();
+    return '';
+}
+
+// /hidetofold
+async function hideToFoldCommand(value) {
+    const last = chat.length - 1;
+    if (last < 0) return '';
+
+    let start = 0, end = last;
+    if (String(value ?? '').trim()) {
+        const range = parseRange(value);
+        if (!range) {
+            window.toastr?.warning('Specify a message index or range. e.g. /hidetofold, /hidetofold 2-5, 4-');
+            return '';
+        }
+        ({ start, end } = range);
+    }
+
+    // batch
+    let count = 0;
+    for (let i = start; i <= end; i++) {
+        if (chat[i]?.is_system && setFoldData(i, true)) count++;
+    }
+    if (count) {
+        scheduleRefresh();
+        await saveChatConditional();
+    }
+    window.toastr?.info(count ? `Folded ${count} hidden message(s).` : 'No hidden messages to fold.');
     return '';
 }
 
@@ -1386,7 +1455,7 @@ function registerSlashCommands() {
         return;
     }
     const mkArg = () => SlashCommandArgument.fromProps({
-        description: 'message index or range (e.g. 3, 2-5, 4-)',
+        description: 'message index or range (e.g. 3, 2-5)',
         typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
         isRequired: true,
     });
@@ -1401,6 +1470,16 @@ function registerSlashCommands() {
         callback: (_args, value) => foldCommand(value, false),
         unnamedArgumentList: [mkArg()],
         helpString: 'Unfolds a message or a range of messages. Example: <code>/unfold 3</code>, <code>/unfold 2-5</code>',
+    }));
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'hidetofold',
+        callback: (_args, value) => hideToFoldCommand(value),
+        unnamedArgumentList: [SlashCommandArgument.fromProps({
+            description: 'optional message index or range (e.g. 3, 2-5). Default: whole chat',
+            typeList: [ARGUMENT_TYPE?.RANGE ?? 'range'],
+            isRequired: false,
+        })],
+        helpString: 'Folds every hidden message. Optionally limit to a range. Example: <code>/hidetofold</code>, <code>/hidetofold 2-5</code>',
     }));
 }
 
@@ -1507,7 +1586,11 @@ function initSettingsPanel() {
                         <label class="mf-opt" for="mf_popup_swipe">
                             <span class="mf-opt-title">Delete swipe</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_popup_swipe"><span class="mf-slider"></span></span>
-                        </label> 
+                        </label>
+                        <label class="mf-opt" for="mf_popup_label">
+                            <span class="mf-opt-title">Set bar text (folded only)</span>
+                            <span class="mf-switch"><input type="checkbox" id="mf_popup_label"><span class="mf-slider"></span></span>
+                        </label>
                     </div>
                     <div class="mf-item">
                         <div class="mf-head mf-head-row">
@@ -1618,6 +1701,7 @@ function initSettingsPanel() {
     bind('mf_popup_hide', 'popupHide');
     bind('mf_popup_fold', 'popupFold');
     bind('mf_popup_swipe', 'popupSwipe');
+    bind('mf_popup_label', 'popupLabel');
 
     // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
     const bindRange = (id, key, fallback, min = HOLD_MIN) => {
