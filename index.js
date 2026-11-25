@@ -53,7 +53,7 @@ const DEFAULTS = {
     popupHide: true,        // 길게 누르기 팝업에 Hide / Unhide 버튼 표시
     popupFold: true,  
     popupSwipe: true, 
-    popupLabel: true,       // 접힌 메시지 길게 누르기 팝업 맨 윗줄에 'Set bar text' 버튼 표시 + 사용자 지정 바 텍스트 사용
+    popupLabel: true,       // 접힌 메시지 길게 누르기 팝업 맨 윗줄에 'Rename' 버튼 표시 + 사용자 지정 바 텍스트 사용
     holdMouse: 610,         // 마우스 길게 누르기 시간(ms)
     holdTouch: 750,         // 터치(모바일) 길게 누르기 시간(ms)
     holdSelTouch: 600,      // 선택한 글자 위 길게 누르기 시간 - 터치(ms)
@@ -500,7 +500,7 @@ function onDocumentClick(e) {
 
 const ctx = () => SillyTavern.getContext();
 
-const escapeHtml = (t) => t.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+const escapeHtml = (t) => String(t ?? '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
 // 선택 여부 확인. Selection.toString() 은 레이아웃을 계산하므로 쓰지 않고,
 // 레이아웃이 필요 없는 Range.toString() 으로 확인한다.
@@ -740,7 +740,8 @@ async function mapParagraph(id, field, para) {
         let acc = 0;
         for (const b of blocks) { b.from = acc; acc += countP(b.text); b.to = acc; }
         // 검증 1: 블록별로 센 합계 == 통째로 센 개수 (리스트/인용문/정규식 때문에 쪼개면 달라지는 경우 걸러냄)
-        if (acc !== countP(val)) { console.debug('[message-fold] block sum != whole', acc, countP(val)); return null; }
+        const whole = countP(val);
+        if (acc !== whole) { console.debug('[message-fold] block sum != whole', acc, whole); return null; }
         // 검증 2: 화면(DOM)의 문단 수와 같아야 함 (원문 ↔ 번역문 짝이 안 맞거나 정규식이 <p>를 만든 경우 걸러냄)
         if (acc !== para.count) { console.debug('[message-fold] p count mismatch', acc, para.count); return null; }
         const last = para.last ?? para.index;
@@ -1090,7 +1091,7 @@ async function editBarLabel(mes, id) {
     const name = chat[id]?.name || '';
 
     const edited = await callGenericPopup(
-        `<h3>Set bar text</h3>
+        `<h3>Rename</h3>
          <div style="text-align:left;opacity:.8;margin-top:8px"><b>#${id}</b> ${escapeHtml(name)}</div>
          <div style="text-align:left;opacity:.6;margin-top:8px;font-size:.85em">Shown on the folded bar instead of the message preview. Leave empty and save to go back to the preview.</div>`,
         POPUP_TYPE.INPUT,
@@ -1100,7 +1101,8 @@ async function editBarLabel(mes, id) {
     if (typeof edited !== 'string') return;   // 취소
     if (!mes.isConnected || Number(mes.getAttribute('mesid')) !== id || !chat[id]) return;
 
-    const next = edited.replace(/\s+/g, ' ').trim().slice(0, 200);
+    // 글자(코드포인트) 단위로 자름: 이모지 한가운데서 잘려 깨지는 것 방지
+    const next = Array.from(edited.replace(/\s+/g, ' ').trim()).slice(0, 200).join('');
     if (next === cur) return;
     chat[id].extra ??= {};
     if (next) chat[id].extra[LABEL_KEY] = next;
@@ -1143,8 +1145,7 @@ async function showLongPressMenu(mes) {
     let customButtons = [];
     // 접힌 메시지에서만: 맨 윗줄을 통째로 차지하는 버튼 (줄 배치는 style.css 의 .mf-label-btn)
     if (folded && pst.popupLabel) {
-        const hasLabel = !!chat[id].extra?.[LABEL_KEY];
-        customButtons.push({ text: hasLabel ? 'Edit bar text' : 'Set bar text', result: CUSTOM_LABEL, classes: ['mf-label-btn'] });
+        customButtons.push({ text: 'Rename', result: CUSTOM_LABEL, classes: ['mf-label-btn'] });
     }
     if (pst.popupEdit) customButtons.push({ text: 'Edit', result: CUSTOM_EDIT });
     if (mode === 'replace') {
@@ -1588,7 +1589,7 @@ function initSettingsPanel() {
                             <span class="mf-switch"><input type="checkbox" id="mf_popup_swipe"><span class="mf-slider"></span></span>
                         </label>
                         <label class="mf-opt" for="mf_popup_label">
-                            <span class="mf-opt-title">Set bar text (folded only)</span>
+                            <span class="mf-opt-title">Rename (folded only)</span>
                             <span class="mf-switch"><input type="checkbox" id="mf_popup_label"><span class="mf-slider"></span></span>
                         </label>
                     </div>
