@@ -203,7 +203,7 @@
     text-align: center !important;
 }
 
-/* 접힌 메시지 팝업의 'Set bar text' 버튼: 맨 윗줄을 혼자 통째로 차지 (Cancel 이 한 줄 전체를 쓰는 것처럼) */
+/* 접힌 메시지 팝업의 'Rename' 버튼: 맨 윗줄을 혼자 통째로 차지 (Cancel 이 한 줄 전체를 쓰는 것처럼) */
 .popup:has(.mf-popup-marker) .popup-controls > .mf-label-btn {
     order: -1 !important;
     flex: 1 1 100% !important;
