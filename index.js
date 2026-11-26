@@ -1566,7 +1566,7 @@ function initSettingsPanel() {
                             <span class="mf-switch"><input type="checkbox" id="mf_long_press_menu"><span class="mf-slider"></span></span>
                         </label>
                     </div>
-                    <div class="mf-item">
+                    <div class="mf-item mf-sub-lp">
                         <div class="mf-head" style="margin-bottom: 6px;">Menu buttons</div>
                         <label class="mf-opt" for="mf_popup_delete">
                             <span class="mf-opt-title">Delete</span>
@@ -1593,7 +1593,7 @@ function initSettingsPanel() {
                             <span class="mf-switch"><input type="checkbox" id="mf_popup_label"><span class="mf-slider"></span></span>
                         </label>
                     </div>
-                    <div class="mf-item">
+                    <div class="mf-item mf-sub-lp">
                         <div class="mf-head mf-head-row">
                             <span>Hold time</span>
                             <span class="mf-head-btns">
@@ -1622,7 +1622,7 @@ function initSettingsPanel() {
                             <span class="mf-switch"><input type="checkbox" id="mf_selection_menu"><span class="mf-slider"></span></span>
                         </label>
                     </div>
-                    <div class="mf-item">
+                    <div class="mf-item mf-sub-sel">
                         <div class="mf-head mf-head-row">
                             <span>Hold time</span>
                             <span class="mf-head-btns">
@@ -1680,6 +1680,14 @@ function initSettingsPanel() {
     const modes = wrap.querySelector('#mf_link_modes');
     const syncModes = () => modes.classList.toggle('mf-disabled', !settings().linkHideFold);
 
+    // 상위 토글이 꺼지면 하부 항목을 흐리게 + 클릭/키보드 모두 차단(inert)
+    const syncSub = (cls, on) => wrap.querySelectorAll(cls).forEach(el => {
+        el.classList.toggle('mf-disabled', !on);
+        el.inert = !on;
+    });
+    const syncLongPress = () => syncSub('.mf-sub-lp', !!settings().longPressMenu);
+    const syncSelection = () => syncSub('.mf-sub-sel', !!settings().selectionMenu);
+
     const bind = (id, key, after) => {
         const el = wrap.querySelector(`#${id}`);
         el.checked = !!settings()[key];
@@ -1695,14 +1703,16 @@ function initSettingsPanel() {
     bind('mf_auto_hide_comments', 'autoHideComments');
     bind('mf_tint_unseen', 'tintUnseen');
     bind('mf_batch_fold', 'batchFold');
-    bind('mf_long_press_menu', 'longPressMenu');
-    bind('mf_selection_menu', 'selectionMenu');
+    bind('mf_long_press_menu', 'longPressMenu', syncLongPress);
+    bind('mf_selection_menu', 'selectionMenu', syncSelection);
     bind('mf_popup_delete', 'popupDelete');
     bind('mf_popup_edit', 'popupEdit');
     bind('mf_popup_hide', 'popupHide');
     bind('mf_popup_fold', 'popupFold');
     bind('mf_popup_swipe', 'popupSwipe');
     bind('mf_popup_label', 'popupLabel');
+    syncLongPress();
+    syncSelection();
 
     // 길게 누르기 시간 슬라이더: 움직이는 동안 숫자 표시, 손을 떼면 저장
     const bindRange = (id, key, fallback, min = HOLD_MIN) => {
